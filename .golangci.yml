@@ -1,0 +1,83 @@
+version: "2"
+
+run:
+  tests: true
+
+linters:
+  default: standard # errcheck, govet, ineffassign, staticcheck, unused
+  enable:
+    - bodyclose
+    - depguard
+    - errorlint
+    - gocritic
+    - misspell
+    - nilerr
+    - noctx
+    - nolintlint
+    - testifylint
+    - thelper
+    - tparallel
+    - unconvert
+    - usestdlibvars
+    - wrapcheck
+  settings:
+    # Module boundaries (docs/conventions/go.md#design). Packages reach each
+    # other's services through interfaces; only the composition root wires
+    # concrete services together.
+    depguard:
+      rules:
+        composition-root:
+          files: ["$all", "!$test", "!**/cmd/**", "!**/internal/app/**", "!**/internal/testenv/**"]
+          deny:
+            - {pkg: github.com/anas-domesticus/personal-agent/internal/app, desc: only cmd and testenv build the app}
+            - {pkg: github.com/anas-domesticus/personal-agent/internal/catalog, desc: depend on a consumer-side interface; app wires the catalog}
+            - {pkg: github.com/anas-domesticus/personal-agent/internal/chat, desc: depend on a consumer-side interface; app wires chat}
+            - {pkg: github.com/anas-domesticus/personal-agent/internal/runs, desc: depend on a consumer-side interface; app wires runs}
+            - {pkg: github.com/anas-domesticus/personal-agent/internal/testenv, desc: test-only}
+            - {pkg: github.com/anas-domesticus/personal-agent/internal/testdb, desc: test-only}
+        table-owners:
+          files: ["$all", "!**/internal/store/**", "!**/internal/catalog/**", "!**/internal/chat/**", "!**/internal/runs/**", "!**/internal/embed/**"]
+          deny:
+            - {pkg: github.com/anas-domesticus/personal-agent/internal/store/db, desc: only the packages that own tables use sqlc queries}
+        tools-via-interfaces:
+          files: ["**/internal/tools/**"]
+          deny:
+            - {pkg: github.com/anas-domesticus/personal-agent/internal/agent, desc: tools reach services through interfaces they declare}
+            - {pkg: github.com/anas-domesticus/personal-agent/internal/embed, desc: tools reach services through interfaces they declare}
+            - {pkg: github.com/anas-domesticus/personal-agent/internal/store, desc: tools reach services through interfaces they declare}
+        leaves:
+          files: ["**/internal/domain/**", "**/internal/workflow/**", "**/internal/tools/kit/**", "**/internal/config/**", "**/internal/llm/**", "**/internal/search/**", "**/internal/workspace/**"]
+          deny:
+            - {pkg: github.com/anas-domesticus/personal-agent/internal/agent, desc: foundation packages depend on nothing above them}
+            - {pkg: github.com/anas-domesticus/personal-agent/internal/embed, desc: foundation packages depend on nothing above them}
+            - {pkg: github.com/anas-domesticus/personal-agent/internal/tools$, desc: foundation packages depend on nothing above them}
+            - {pkg: github.com/anas-domesticus/personal-agent/internal/tools/mcp, desc: foundation packages depend on nothing above them}
+    nolintlint:
+      require-explanation: true
+      require-specific: true
+    wrapcheck:
+      # Our own packages return errors with enough context already.
+      ignore-package-globs:
+        - github.com/anas-domesticus/personal-agent/*
+      ignore-sig-regexps:
+        - \.Errorf\(
+        - errors\.New\(
+        - errors\.Join\(
+        - river\.Job(Cancel|Snooze)\(
+  exclusions:
+    generated: strict
+    presets: [std-error-handling]
+    paths:
+      - internal/store/db
+      - internal/mocks
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/anas-domesticus/personal-agent
+  exclusions:
+    generated: strict

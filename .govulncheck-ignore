@@ -1,0 +1,5 @@
+# Vulnerabilities govulncheck reports that we accept for now. One per line:
+# the ID, then why it's acceptable and what would end it. Review on every
+# dependency upgrade; scripts/vuln.sh flags entries that no longer apply.
+
+GO-2026-6911  mcp-go SSRF via redirect Location header. No fixed release yet. MCP servers come only from our own config (trusted URLs). Remove when mcp-go ships a fix.

@@ -2,7 +2,31 @@ version: "3"
 
 dotenv: [".env"]
 
+vars:
+  GOLANGCI_LINT_VERSION: v2.15.0
+  SQLC_VERSION: v1.31.1
+  GOOSE_VERSION: v3.29.0
+  GOVULNCHECK_VERSION: v1.9.0
+
 tasks:
+  default:
+    desc: List tasks
+    silent: true
+    cmds:
+      - task --list
+
+  # --- Setup --------------------------------------------------------------
+
+  tools:
+    desc: Install pinned dev tools (golangci-lint, sqlc, goose, govulncheck); mockery runs via `go tool`
+    cmds:
+      - go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@{{.GOLANGCI_LINT_VERSION}}
+      - go install github.com/sqlc-dev/sqlc/cmd/sqlc@{{.SQLC_VERSION}}
+      - go install github.com/pressly/goose/v3/cmd/goose@{{.GOOSE_VERSION}}
+      - go install golang.org/x/vuln/cmd/govulncheck@{{.GOVULNCHECK_VERSION}}
+
+  # --- Local services -----------------------------------------------------
+
   up:
     desc: Start Postgres
     cmds:
@@ -30,11 +54,26 @@ tasks:
     cmds:
       - goose -dir internal/store/migrations create {{.CLI_ARGS}} sql
 
+  # --- Code generation ----------------------------------------------------
+
+  generate:
+    desc: Regenerate all generated code (sqlc queries and mocks)
+    cmds:
+      - task: sqlc
+      - task: mocks
+
   sqlc:
     desc: Regenerate query code from SQL
     sources: ["internal/store/queries/*.sql", "internal/store/migrations/*.sql", "sqlc.yaml"]
     cmds:
       - sqlc generate
+
+  mocks:
+    desc: Regenerate mocks for every interface (see .mockery.yml)
+    cmds:
+      - go tool mockery
+
+  # --- Build and run ------------------------------------------------------
 
   build:
     desc: Build agentd
@@ -48,13 +87,70 @@ tasks:
     cmds:
       - go run ./cmd/agentd
 
-  test:
-    desc: Run tests (needs Docker for testcontainers)
-    deps: [sqlc]
+  # --- Quality ------------------------------------------------------------
+
+  fmt:
+    desc: Format code (gofmt, goimports)
     cmds:
-      - go test ./... {{.CLI_ARGS}}
+      - golangci-lint fmt ./...
 
   lint:
-    desc: Run go vet
+    desc: Run golangci-lint (see .golangci.yml)
     cmds:
-      - go vet ./...
+      - golangci-lint run ./...
+
+  test:
+    desc: Run unit and database tests (needs Docker for testcontainers)
+    deps: [sqlc]
+    cmds:
+      - go test -race ./... {{.CLI_ARGS}}
+
+  test:unit:
+    desc: Run unit tests only (no Docker, no network)
+    cmds:
+      - go test -race -short ./... {{.CLI_ARGS}}
+
+  test:live:
+    desc: Run live tests against OpenRouter (costs a little; needs OPENROUTER_API_KEY)
+    cmds:
+      - go test -tags live -run Live -count=1 ./... {{.CLI_ARGS}}
+
+  cover:
+    desc: Run tests with coverage and print a per-function summary
+    cmds:
+      - go test -short -coverprofile=coverage.out ./...
+      - go tool cover -func=coverage.out | tail -1
+
+  docs:check:
+    desc: Check every package has a doc comment and is in docs/architecture.md
+    cmds:
+      - ./scripts/check-docs.sh
+
+  generate:check:
+    desc: Fail if generated code (sqlc, mocks) or go.mod is out of date
+    cmds:
+      - task: generate
+      - go mod tidy
+      - git diff --exit-code -- go.mod go.sum internal/store/db internal/mocks '**/mocks_test.go'
+      - test -z "$(git status --porcelain -- internal/store/db internal/mocks '**/mocks_test.go')"
+
+  vuln:
+    desc: Check dependencies for known vulnerabilities
+    cmds:
+      - ./scripts/vuln.sh
+
+  check:fast:
+    desc: Quick loop while working (no Docker) - lint issues new since HEAD, unit tests, docs
+    cmds:
+      - golangci-lint run --new-from-rev=HEAD ./...
+      - go test -short ./...
+      - task: docs:check
+
+  check:
+    desc: Everything a change must pass before it is done (CI runs this)
+    cmds:
+      - task: generate:check
+      - task: docs:check
+      - task: lint
+      - task: vuln
+      - task: test

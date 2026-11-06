@@ -39,16 +39,26 @@ import (
 	"github.com/anas-domesticus/personal-agent/internal/tools/mcp"
 )
 
+// MCPSource is the configured MCP servers and their tools. *mcp.Set
+// implements it.
+type MCPSource interface {
+	Configured(server string) bool
+	Tool(name string) (tool.InvokableTool, bool)
+	ServerTools(server string) ([]tool.InvokableTool, bool)
+	Tools() []tool.InvokableTool
+	Status() []mcp.Status
+}
+
 // Registry holds the general tools and knows the admin tools' names.
 type Registry struct {
 	specs map[string]kit.Spec
 	admin []string
-	mcp   *mcp.Set
+	mcp   MCPSource
 }
 
 // New builds the registry from the general tool specs. adminNames are the
 // admin tools' names, so versions can turn them off.
-func New(general []kit.Spec, adminNames []string, mcpSet *mcp.Set) (*Registry, error) {
+func New(general []kit.Spec, adminNames []string, mcpSet MCPSource) (*Registry, error) {
 	r := &Registry{specs: map[string]kit.Spec{}, admin: slices.Clone(adminNames), mcp: mcpSet}
 	for _, s := range general {
 		switch {

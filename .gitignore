@@ -2,3 +2,4 @@
 bin/
 .task/
 /workspace/
+coverage.out
