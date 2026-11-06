@@ -2,114 +2,90 @@ package admin
 
 import (
 	"context"
-	"encoding/json"
 	"time"
 
 	"github.com/cloudwego/eino/components/tool"
 	"github.com/google/uuid"
 
-	"github.com/anas-domesticus/personal-agent/internal/runs"
+	"github.com/anas-domesticus/personal-agent/internal/domain"
 	"github.com/anas-domesticus/personal-agent/internal/tools/kit"
 )
 
 const maxWait = 5 * time.Minute
 
-func runTools(d Deps) ([]tool.InvokableTool, error) {
-	c := d.Catalog
+func runTools(r Runs) ([]tool.InvokableTool, error) {
 	return kit.Build(
 		func() (tool.InvokableTool, error) {
 			return kit.New("run_workflow",
 				"Start a run of a workflow's current version. Optionally wait for it to finish and return the result.",
-				func(ctx context.Context, in runWorkflowIn) (runDetail, error) {
+				func(ctx context.Context, in runWorkflowIn) (domain.RunDetail, error) {
 					triggeredBy := "agent"
-					if name := kit.Agent(ctx); name != "" {
+					if name := domain.Caller(ctx); name != "" {
 						triggeredBy = "agent:" + name
 					}
-					id, err := c.StartRun(ctx, in.Name, marshalOrNil(in.Input), triggeredBy)
+					id, err := r.Start(ctx, in.Name, marshalOrNil(in.Input), triggeredBy)
 					if err != nil {
-						return runDetail{}, err
+						return domain.RunDetail{}, err
 					}
 					if in.WaitSeconds > 0 {
 						wait := min(time.Duration(in.WaitSeconds)*time.Second, maxWait)
-						if err := waitForRun(ctx, d, id, wait); err != nil {
-							return runDetail{}, err
+						if err := waitForRun(ctx, r, id, wait); err != nil {
+							return domain.RunDetail{}, err
 						}
 					}
-					return getRun(ctx, d, id, false)
+					return getRun(ctx, r, id, false)
 				})
 		},
 		func() (tool.InvokableTool, error) {
 			return kit.New("get_run", "Get a run's status, input, output and each step's result.",
-				func(ctx context.Context, in getRunIn) (runDetail, error) {
-					return getRun(ctx, d, in.ID, in.IncludeTranscripts)
+				func(ctx context.Context, in getRunIn) (domain.RunDetail, error) {
+					return getRun(ctx, r, in.ID, in.IncludeTranscripts)
 				})
 		},
 		func() (tool.InvokableTool, error) {
 			return kit.New("list_runs", "List recent runs, newest first.",
-				func(ctx context.Context, in listRunsIn) ([]runSummary, error) {
-					rows, err := c.ListRuns(ctx, in.Workflow, kit.Limit(in.Limit, 10))
-					if err != nil {
-						return nil, err
-					}
-					out := make([]runSummary, len(rows))
-					for i, r := range rows {
-						out[i] = runSummary{
-							ID: r.ID, Workflow: r.WorkflowName, WorkflowVersion: r.WorkflowVersion, Status: r.Status,
-							Error: r.Error, TriggeredBy: r.TriggeredBy, CreatedAt: r.CreatedAt, FinishedAt: r.FinishedAt,
-						}
-					}
-					return out, nil
+				func(ctx context.Context, in listRunsIn) ([]domain.Run, error) {
+					return r.List(ctx, in.Workflow, kit.Limit(in.Limit, 10))
 				})
 		},
 	)
 }
 
-func waitForRun(ctx context.Context, d Deps, id uuid.UUID, wait time.Duration) error {
+func waitForRun(ctx context.Context, r Runs, id uuid.UUID, wait time.Duration) error {
 	ctx, cancel := context.WithTimeout(ctx, wait)
 	defer cancel()
 	tick := time.NewTicker(time.Second)
 	defer tick.Stop()
 	for {
-		r, err := d.Catalog.GetRun(ctx, id)
+		d, err := r.Get(ctx, id)
+		if ctx.Err() != nil {
+			return nil // still running; the caller sees its current status
+		}
 		if err != nil {
 			return err
 		}
-		if runs.Terminal(r.Run.Status) {
+		if d.Status.Terminal() {
 			return nil
 		}
 		select {
 		case <-ctx.Done():
-			return nil // still running; the caller sees its current status
+			return nil
 		case <-tick.C:
 		}
 	}
 }
 
-func getRun(ctx context.Context, d Deps, id uuid.UUID, transcripts bool) (runDetail, error) {
-	r, err := d.Catalog.GetRun(ctx, id)
+func getRun(ctx context.Context, r Runs, id uuid.UUID, transcripts bool) (domain.RunDetail, error) {
+	d, err := r.Get(ctx, id)
 	if err != nil {
-		return runDetail{}, err
+		return domain.RunDetail{}, err
 	}
-	out := runDetail{
-		runSummary: runSummary{
-			ID: r.Run.ID, Workflow: r.Run.WorkflowName, WorkflowVersion: r.Run.WorkflowVersion, Status: r.Run.Status,
-			Error: r.Run.Error, TriggeredBy: r.Run.TriggeredBy, CreatedAt: r.Run.CreatedAt, FinishedAt: r.Run.FinishedAt,
-		},
-		Input:  r.Run.Input,
-		Output: r.Run.Output,
-		Steps:  make([]stepOut, len(r.Steps)),
-	}
-	for i, s := range r.Steps {
-		out.Steps[i] = stepOut{
-			Node: s.NodeID, Agent: s.AgentName, AgentVersion: s.AgentVersion, Status: s.Status,
-			Input: s.Input, Output: s.Output, Error: s.Error,
-			PromptTokens: s.PromptTokens, CompletionTokens: s.CompletionTokens,
-		}
-		if transcripts {
-			out.Steps[i].Transcript = s.Messages
+	if !transcripts {
+		for i := range d.Steps {
+			d.Steps[i].Transcript = nil
 		}
 	}
-	return out, nil
+	return d, nil
 }
 
 type runWorkflowIn struct {
@@ -120,41 +96,10 @@ type runWorkflowIn struct {
 
 type getRunIn struct {
 	ID                 uuid.UUID `json:"id"`
-	IncludeTranscripts bool      `json:"include_transcripts,omitempty" jsonschema_description:"Include each step's full message transcript, for debugging. Can be long."`
+	IncludeTranscripts bool      `json:"include_transcripts,omitempty" jsonschema_description:"Include each step's full message transcript, for debugging. Long transcripts are truncated."`
 }
 
 type listRunsIn struct {
 	Workflow string `json:"workflow,omitempty" jsonschema_description:"Only runs of this workflow."`
 	Limit    int32  `json:"limit,omitempty" jsonschema_description:"Maximum results, default 10."`
-}
-
-type runSummary struct {
-	ID              uuid.UUID  `json:"id"`
-	Workflow        string     `json:"workflow"`
-	WorkflowVersion int32      `json:"workflow_version"`
-	Status          string     `json:"status"`
-	Error           *string    `json:"error,omitempty"`
-	TriggeredBy     string     `json:"triggered_by"`
-	CreatedAt       time.Time  `json:"created_at"`
-	FinishedAt      *time.Time `json:"finished_at,omitempty"`
-}
-
-type runDetail struct {
-	runSummary
-	Input  json.RawMessage `json:"input"`
-	Output json.RawMessage `json:"output,omitempty"`
-	Steps  []stepOut       `json:"steps"`
-}
-
-type stepOut struct {
-	Node             string          `json:"node"`
-	Agent            *string         `json:"agent"`
-	AgentVersion     *int32          `json:"agent_version"`
-	Status           string          `json:"status"`
-	Input            json.RawMessage `json:"input"`
-	Output           json.RawMessage `json:"output,omitempty"`
-	Error            *string         `json:"error,omitempty"`
-	PromptTokens     int32           `json:"prompt_tokens"`
-	CompletionTokens int32           `json:"completion_tokens"`
-	Transcript       json.RawMessage `json:"transcript,omitempty"`
 }

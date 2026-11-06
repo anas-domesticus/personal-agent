@@ -12,9 +12,17 @@ type Config struct {
 	OpenRouterAPIKey string
 	EmbeddingModel   string // OpenRouter slug; must produce 1536 dimensions to match the schema
 	AdminModel       string // OpenRouter slug for the admin agent's first version
+	SearchModel      string // OpenRouter slug that runs web searches
+	Workspace        string // where file and shell tools act: "local" or "sandbox"
+	WorkspaceDir     string // root of the local workspace
 	MCPConfigPath    string // where MCP was loaded from
 	MCP              MCP
 }
+
+const (
+	WorkspaceLocal   = "local"
+	WorkspaceSandbox = "sandbox"
+)
 
 // Load reads the environment and the MCP file. The MCP file defaults to
 // mcp.yaml in the working directory; a missing file means no MCP servers.
@@ -24,10 +32,16 @@ func Load() (Config, error) {
 		OpenRouterAPIKey: os.Getenv("OPENROUTER_API_KEY"),
 		EmbeddingModel:   getenv("EMBEDDING_MODEL", "openai/text-embedding-3-small"),
 		AdminModel:       getenv("ADMIN_MODEL", "deepseek/deepseek-v4.1-flash"),
+		SearchModel:      getenv("SEARCH_MODEL", "deepseek/deepseek-v4.1-flash"),
+		Workspace:        getenv("WORKSPACE", WorkspaceLocal),
+		WorkspaceDir:     getenv("WORKSPACE_DIR", "workspace"),
 		MCPConfigPath:    getenv("MCP_CONFIG", "mcp.yaml"),
 	}
 	if c.DatabaseURL == "" {
 		return c, fmt.Errorf("DATABASE_URL is required")
+	}
+	if c.Workspace != WorkspaceLocal && c.Workspace != WorkspaceSandbox {
+		return c, fmt.Errorf("WORKSPACE must be %q or %q", WorkspaceLocal, WorkspaceSandbox)
 	}
 	mcp, err := LoadMCP(c.MCPConfigPath)
 	if err != nil {

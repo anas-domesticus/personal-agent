@@ -29,16 +29,26 @@ func (c Config) baseURL() string {
 	return DefaultBaseURL
 }
 
-// NewChatModel returns a tool-calling chat model for the given slug.
-func NewChatModel(ctx context.Context, cfg Config, slug string) (model.ToolCallingChatModel, error) {
+// Spec is a chat model and its sampling settings. Nil settings use the
+// provider's defaults.
+type Spec struct {
+	Model       string // OpenRouter slug
+	Temperature *float32
+	MaxTokens   *int
+}
+
+// NewChatModel returns a tool-calling chat model.
+func NewChatModel(ctx context.Context, cfg Config, spec Spec) (model.ToolCallingChatModel, error) {
 	m, err := openrouter.NewChatModel(ctx, &openrouter.Config{
-		APIKey:  cfg.APIKey,
-		BaseURL: cfg.baseURL(),
-		Model:   slug,
-		Timeout: 2 * time.Minute,
+		APIKey:      cfg.APIKey,
+		BaseURL:     cfg.baseURL(),
+		Model:       spec.Model,
+		Temperature: spec.Temperature,
+		MaxTokens:   spec.MaxTokens,
+		Timeout:     2 * time.Minute,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("chat model %s: %w", slug, err)
+		return nil, fmt.Errorf("chat model %s: %w", spec.Model, err)
 	}
 	return m, nil
 }
@@ -57,13 +67,4 @@ func NewEmbedder(ctx context.Context, cfg Config, slug string) (embedding.Embedd
 		return nil, fmt.Errorf("embedder %s: %w", slug, err)
 	}
 	return e, nil
-}
-
-// Float32s converts Eino's float64 embeddings to the float32 vectors pgvector stores.
-func Float32s(in []float64) []float32 {
-	out := make([]float32, len(in))
-	for i, v := range in {
-		out[i] = float32(v)
-	}
-	return out
 }

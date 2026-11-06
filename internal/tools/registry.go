@@ -1,173 +1,253 @@
-// Package tools is the registry of every native tool. The tools themselves
-// live in submodules:
+// Package tools is the registry of every tool an agent can be given. The
+// tools themselves live in submodules:
 //
 //   - clock:  time
 //   - memory: long-term memory search and writes
+//   - files:  read, write, edit, glob, grep and shell, through a workspace
+//   - web:    web search and fetch
 //   - mcp:    tools from the MCP servers in the MCP config
 //   - admin:  managing agents, workflows and runs
 //
-// General tools (clock, memory, MCP) are opted into by listing their names on
-// an agent version; "mcp:<server>" lists every tool from one MCP server.
-// Admin tools can't be listed by name; they are injected only when the agent
-// has the admin flag, which only a human can set.
+// The subagent tool is built by the agent builder (it builds agents), but is
+// registered here like any other so it can be configured and validated.
+//
+// An agent version turns tools on in its config's "tools" object: true, a
+// settings object, or false. "mcp:<server>" turns on every tool from one MCP
+// server. Admin tools are given to agents with the admin flag (which only
+// code can set) and can only be turned off, never on.
+//
+// Building happens in two steps so nothing needs late binding: the Registry
+// of general tools comes first (the agent catalog uses it to validate
+// versions), then WithAdmin adds the admin tools, which need the catalog, to
+// make the Toolset that agents are built from.
 package tools
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"sort"
 	"strings"
 
 	"github.com/cloudwego/eino/components/tool"
 
-	"github.com/anas-domesticus/personal-agent/internal/catalog"
-	"github.com/anas-domesticus/personal-agent/internal/tools/admin"
-	"github.com/anas-domesticus/personal-agent/internal/tools/clock"
+	"github.com/anas-domesticus/personal-agent/internal/domain"
 	"github.com/anas-domesticus/personal-agent/internal/tools/kit"
 	"github.com/anas-domesticus/personal-agent/internal/tools/mcp"
-	"github.com/anas-domesticus/personal-agent/internal/tools/memory"
 )
 
-type Deps struct {
-	Catalog *catalog.Catalog
-	MCP     *mcp.Set // optional
-}
-
+// Registry holds the general tools and knows the admin tools' names.
 type Registry struct {
-	general map[string]tool.InvokableTool
-	admin   []tool.InvokableTool
-	mcp     *mcp.Set
+	specs map[string]kit.Spec
+	admin []string
+	mcp   *mcp.Set
 }
 
-func New(d Deps) (*Registry, error) {
-	r := &Registry{general: map[string]tool.InvokableTool{}, mcp: d.MCP}
-
-	for _, set := range []func() ([]tool.InvokableTool, error){
-		clock.Tools,
-		func() ([]tool.InvokableTool, error) { return memory.Tools(d.Catalog) },
-		func() ([]tool.InvokableTool, error) {
-			if d.MCP == nil {
-				return nil, nil
-			}
-			return d.MCP.Tools(), nil
-		},
-	} {
-		ts, err := set()
-		if err != nil {
-			return nil, err
+// New builds the registry from the general tool specs. adminNames are the
+// admin tools' names, so versions can turn them off.
+func New(general []kit.Spec, adminNames []string, mcpSet *mcp.Set) (*Registry, error) {
+	r := &Registry{specs: map[string]kit.Spec{}, admin: slices.Clone(adminNames), mcp: mcpSet}
+	for _, s := range general {
+		switch {
+		case s.Admin:
+			return nil, fmt.Errorf("tool %q: admin tools go through WithAdmin", s.Name)
+		case mcp.IsMCPName(s.Name):
+			return nil, fmt.Errorf("native tool %q uses MCP naming", s.Name)
+		case slices.Contains(r.admin, s.Name):
+			return nil, fmt.Errorf("tool %q is both general and admin", s.Name)
 		}
-		for _, t := range ts {
-			name := toolName(t)
-			if _, dup := r.general[name]; dup {
-				return nil, fmt.Errorf("duplicate tool %q", name)
-			}
-			r.general[name] = t
+		if _, dup := r.specs[s.Name]; dup {
+			return nil, fmt.Errorf("duplicate tool %q", s.Name)
 		}
-	}
-
-	var err error
-	r.admin, err = admin.Tools(admin.Deps{Catalog: d.Catalog, Assignable: r.General})
-	if err != nil {
-		return nil, err
-	}
-	// Admin tool names must not collide with general ones, or listing a
-	// general tool name could smuggle in an admin tool.
-	for _, t := range r.admin {
-		if _, dup := r.general[toolName(t)]; dup {
-			return nil, fmt.Errorf("tool %q is both general and admin", toolName(t))
-		}
+		r.specs[s.Name] = s
 	}
 	return r, nil
 }
 
-// Assignable reports whether an agent version may list this tool by name.
-// MCP tools are only assignable while their server is connected.
-func (r *Registry) Assignable(name string) bool {
+var errFlagOnly = errors.New("admin tools come from the admin flag; they can only be turned off (false)")
+
+// Check validates one entry of a version's tools config.
+func (r *Registry) Check(name string, value json.RawMessage) error {
+	on := string(value) != "false"
+	isObject := len(value) > 0 && value[0] == '{'
+	if s, ok := r.specs[name]; ok {
+		if !on {
+			return nil
+		}
+		_, err := s.DecodeSettings(value)
+		return err
+	}
+	if slices.Contains(r.admin, name) {
+		if on {
+			return errFlagOnly
+		}
+		return nil
+	}
+	if mcp.IsMCPName(name) {
+		if isObject {
+			return errors.New("MCP tools take no settings; use true or false")
+		}
+		return r.checkMCP(name)
+	}
+	return errors.New("unknown tool; see list_tools")
+}
+
+// checkMCP judges MCP names by the config, so a version can name a server's
+// tools while the server is down.
+func (r *Registry) checkMCP(name string) error {
 	if server, ok := strings.CutPrefix(name, mcp.ServerPrefix); ok {
-		if r.mcp == nil {
-			return false
+		if !r.mcp.Configured(server) {
+			return fmt.Errorf("no MCP server %q is configured", server)
 		}
-		_, connected := r.mcp.ServerTools(server)
-		return connected
+		return nil
 	}
-	_, ok := r.general[name]
-	return ok
+	server, _, _ := strings.Cut(name, mcp.Separator)
+	if !r.mcp.Configured(server) {
+		return fmt.Errorf("no MCP server %q is configured", server)
+	}
+	if _, connected := r.mcp.ServerTools(server); !connected {
+		return nil // can't check the tool name until the server is back
+	}
+	if _, exists := r.mcp.Tool(name); !exists {
+		return fmt.Errorf("MCP server %q has no tool %q", server, name)
+	}
+	return nil
 }
 
-// For returns an agent's tools: the named general tools, plus every admin
-// tool if admin is set.
-func (r *Registry) For(names []string, admin bool) ([]tool.BaseTool, error) {
-	var out []tool.BaseTool
-	seen := map[string]bool{}
-	add := func(n string) {
-		if !seen[n] {
-			seen[n] = true
-			out = append(out, r.general[n])
-		}
+// Assignable lists the tools versions can turn on, with their settings: each
+// general tool, an "mcp:<server>" entry per configured server, and each
+// connected MCP tool.
+func (r *Registry) Assignable() []kit.Info {
+	out := make([]kit.Info, 0, len(r.specs))
+	for _, s := range r.specs {
+		out = append(out, kit.Info{Name: s.Name, Description: s.Summary, Settings: s.SettingsHelp})
 	}
-	for _, n := range names {
-		if server, ok := strings.CutPrefix(n, mcp.ServerPrefix); ok {
-			if tools, connected := r.serverTools(server); connected {
-				for _, t := range tools {
-					add(t)
-				}
-			} else {
-				slog.Warn("mcp server not connected; its tools are unavailable", "server", server)
-			}
-			continue
+	for _, st := range r.mcp.Status() {
+		desc := fmt.Sprintf("Every tool from the %s MCP server (%d tools).", st.Server, st.Tools)
+		if !st.Connected {
+			desc = fmt.Sprintf("Every tool from the %s MCP server, which is currently unavailable: %s", st.Server, st.Error)
 		}
-		if _, ok := r.general[n]; !ok {
-			// An MCP server being down shouldn't make the agent unusable.
-			if mcp.IsMCPName(n) {
-				slog.Warn("mcp tool unavailable", "tool", n)
-				continue
-			}
-			return nil, fmt.Errorf("unknown tool %q", n)
-		}
-		add(n)
+		out = append(out, kit.Info{Name: mcp.ServerPrefix + st.Server, Description: desc})
 	}
-	if admin {
-		for _, t := range r.admin {
-			out = append(out, t)
-		}
-	}
-	return out, nil
-}
-
-// General lists the assignable tools, including an "mcp:<server>" entry per
-// connected MCP server.
-func (r *Registry) General() []kit.Info {
-	out := make([]kit.Info, 0, len(r.general))
-	for name, t := range r.general {
-		info, _ := t.Info(context.Background())
-		out = append(out, kit.Info{Name: name, Description: info.Desc})
-	}
-	if r.mcp != nil {
-		for _, st := range r.mcp.Status() {
-			if st.Error == "" {
-				out = append(out, kit.Info{
-					Name:        mcp.ServerPrefix + st.Server,
-					Description: fmt.Sprintf("Every tool from the %s MCP server (%d tools).", st.Server, st.Tools),
-				})
-			}
+	for _, t := range r.mcp.Tools() {
+		info, err := t.Info(context.Background())
+		if err == nil {
+			out = append(out, kit.Info{Name: info.Name, Description: firstLine(info.Desc)})
 		}
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out
 }
 
-// WithAgent records which agent is calling tools.
-func WithAgent(ctx context.Context, name string) context.Context { return kit.WithAgent(ctx, name) }
-
-func (r *Registry) serverTools(server string) ([]string, bool) {
-	if r.mcp == nil {
-		return nil, false
-	}
-	return r.mcp.ServerTools(server)
+// Spec returns a general tool's spec.
+func (r *Registry) Spec(name string) (kit.Spec, bool) {
+	s, ok := r.specs[name]
+	return s, ok
 }
 
-func toolName(t tool.InvokableTool) string {
-	info, _ := t.Info(context.Background())
-	return info.Name
+// resolve builds the general and MCP tools a config turns on. Tools that
+// can't be built, because an MCP server is down, a tool was removed, or its
+// settings no longer decode, are logged and skipped: a missing tool must not
+// stop an agent, least of all the admin agent that could fix it, from
+// running. Specs without a constructor (subagent) are left to the builder.
+func (r *Registry) resolve(cfg domain.ToolConfig) []tool.BaseTool {
+	var out []tool.BaseTool
+	seen := map[string]bool{}
+	add := func(t tool.InvokableTool) {
+		if n := kit.Name(t); !seen[n] {
+			seen[n] = true
+			out = append(out, t)
+		}
+	}
+	for _, name := range cfg.Enabled() {
+		if s, ok := r.specs[name]; ok {
+			if s.New == nil {
+				continue
+			}
+			settings, err := s.DecodeSettings(cfg[name])
+			if err == nil {
+				var t tool.InvokableTool
+				if t, err = s.New(settings); err == nil {
+					add(t)
+					continue
+				}
+			}
+			slog.Warn("tool can't be built; skipping it", "tool", name, "err", err)
+			continue
+		}
+		if server, ok := strings.CutPrefix(name, mcp.ServerPrefix); ok {
+			ts, connected := r.mcp.ServerTools(server)
+			if !connected {
+				slog.Warn("mcp server not connected; its tools are unavailable", "server", server)
+			}
+			for _, t := range ts {
+				add(t)
+			}
+			continue
+		}
+		if t, ok := r.mcp.Tool(name); ok {
+			add(t)
+			continue
+		}
+		if !slices.Contains(r.admin, name) {
+			slog.Warn("tool unavailable; skipping it", "tool", name)
+		}
+	}
+	return out
+}
+
+// Toolset is the general tools plus the admin tools.
+type Toolset struct {
+	general *Registry
+	admin   []tool.InvokableTool
+}
+
+// WithAdmin makes the Toolset agents are built from. The admin tools must be
+// exactly the ones named when the Registry was made.
+func (r *Registry) WithAdmin(admin []kit.Spec) (*Toolset, error) {
+	ts := &Toolset{general: r}
+	var names []string
+	for _, s := range admin {
+		if !s.Admin {
+			return nil, fmt.Errorf("tool %q is not marked admin", s.Name)
+		}
+		if _, dup := r.specs[s.Name]; dup || mcp.IsMCPName(s.Name) {
+			return nil, fmt.Errorf("tool %q is both general and admin", s.Name)
+		}
+		t, err := s.New(nil)
+		if err != nil {
+			return nil, err
+		}
+		ts.admin = append(ts.admin, t)
+		names = append(names, s.Name)
+	}
+	sort.Strings(names)
+	want := slices.Sorted(slices.Values(r.admin))
+	if !slices.Equal(names, want) {
+		return nil, fmt.Errorf("admin tools %v don't match the registry's admin names %v", names, want)
+	}
+	return ts, nil
+}
+
+// For returns the tools a config turns on, plus the admin tools (except those
+// turned off) if admin is set.
+func (t *Toolset) For(cfg domain.ToolConfig, admin bool) []tool.BaseTool {
+	out := t.general.resolve(cfg)
+	if admin {
+		for _, a := range t.admin {
+			if listed, on := cfg.State(kit.Name(a)); listed && !on {
+				continue
+			}
+			out = append(out, a)
+		}
+	}
+	return out
+}
+
+func firstLine(s string) string {
+	line, _, _ := strings.Cut(s, "\n")
+	return line
 }

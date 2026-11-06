@@ -1,117 +1,162 @@
 // Package chat runs conversations with an agent and stores them.
 //
-// Eino's ADK runner is stateless: each turn takes the full message history.
-// This package keeps that history in Postgres, one row per schema.Message.
+// Eino's ADK runner is stateless: each turn takes the message history. This
+// package keeps that history and decides how much of it each turn sees.
+//
+// The user's message and what the agent produced are saved together at the
+// end of a turn, so the history never holds a tool call without its result.
+// A turn that fails before any tool ran leaves no trace. One that fails after
+// tools ran (they may have changed things) saves the part that completed, so
+// the agent can see what was done.
 package chat
 
 import (
 	"context"
-	"encoding/json"
-	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"unicode/utf8"
 
 	"github.com/cloudwego/eino/schema"
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
 
 	"github.com/anas-domesticus/personal-agent/internal/agent"
-	"github.com/anas-domesticus/personal-agent/internal/catalog"
-	"github.com/anas-domesticus/personal-agent/internal/store"
-	"github.com/anas-domesticus/personal-agent/internal/store/db"
+	"github.com/anas-domesticus/personal-agent/internal/domain"
 )
 
+// Store keeps conversations. *PGStore implements it.
+type Store interface {
+	Create(ctx context.Context, agentName string) (domain.Conversation, error)
+	Get(ctx context.Context, id uuid.UUID) (domain.Conversation, error)
+	List(ctx context.Context, limit int32) ([]domain.Conversation, error)
+	// History returns the messages in order and the id of the last one
+	// (0 if there are none).
+	History(ctx context.Context, id uuid.UUID) ([]*schema.Message, int64, error)
+	// AppendTurn saves a turn's messages, and the title if one is given. It
+	// returns domain.ErrConflict if messages were added after lastID.
+	AppendTurn(ctx context.Context, id uuid.UUID, lastID int64, msgs []*schema.Message, agentVersion int32, title string) error
+}
+
+// Agents builds agents. *agent.Builder implements it.
+type Agents interface {
+	Build(ctx context.Context, name string) (agent.Runnable, error)
+	BuildSpec(ctx context.Context, spec domain.SubagentSpec, depth int) (agent.Runnable, error)
+}
+
 type Service struct {
-	Store   *store.Store
-	Builder *agent.Builder
+	store  Store
+	agents Agents
+	// HistoryChars bounds the history sent each turn. Older messages stay
+	// stored but aren't sent.
+	HistoryChars int
+
+	mu     sync.Mutex
+	active map[uuid.UUID]bool
+}
+
+func New(store Store, agents Agents) *Service {
+	return &Service{store: store, agents: agents, HistoryChars: agent.DefaultHistoryChars, active: map[uuid.UUID]bool{}}
 }
 
 // Start creates a conversation with the named agent.
-func (s *Service) Start(ctx context.Context, agentName string) (uuid.UUID, error) {
-	a, err := s.Store.GetAgentByName(ctx, agentName)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return uuid.Nil, fmt.Errorf("agent %q: %w", agentName, catalog.ErrNotFound)
-	}
-	if err != nil {
-		return uuid.Nil, err
-	}
-	c, err := s.Store.CreateConversation(ctx, db.CreateConversationParams{AgentID: a.ID})
-	return c.ID, err
+func (s *Service) Start(ctx context.Context, agentName string) (domain.Conversation, error) {
+	return s.store.Create(ctx, agentName)
+}
+
+func (s *Service) Get(ctx context.Context, id uuid.UUID) (domain.Conversation, error) {
+	return s.store.Get(ctx, id)
+}
+
+// List returns recent conversations, most recently active first.
+func (s *Service) List(ctx context.Context, limit int32) ([]domain.Conversation, error) {
+	return s.store.List(ctx, limit)
 }
 
 // History returns the conversation's messages in order.
 func (s *Service) History(ctx context.Context, id uuid.UUID) ([]*schema.Message, error) {
-	rows, err := s.Store.ListMessages(ctx, id)
-	if err != nil {
-		return nil, err
-	}
-	out := make([]*schema.Message, 0, len(rows))
-	for _, r := range rows {
-		var m schema.Message
-		if err := json.Unmarshal(r.Message, &m); err != nil {
-			return nil, fmt.Errorf("message %d: %w", r.ID, err)
-		}
-		out = append(out, &m)
-	}
-	return out, nil
+	msgs, _, err := s.store.History(ctx, id)
+	return msgs, err
 }
 
 // Send adds a user message and runs the agent's current version over the
-// whole conversation. onMessage, if set, sees each new message as it
-// completes. The user message is saved first; the agent's messages are saved
-// together once the turn succeeds, so a failed turn never leaves a dangling
-// tool call in the history.
+// conversation. onMessage, if set, sees each new message as it completes.
+// A conversation handles one turn at a time; a second Send while one is in
+// progress returns domain.ErrBusy.
 func (s *Service) Send(ctx context.Context, id uuid.UUID, text string, onMessage func(*schema.Message)) (agent.Turn, error) {
-	conv, err := s.Store.GetConversation(ctx, id)
-	if err != nil {
-		return agent.Turn{}, fmt.Errorf("conversation %s: %w", id, err)
+	if !s.lock(id) {
+		return agent.Turn{}, fmt.Errorf("conversation %s is handling another message: %w", id, domain.ErrBusy)
 	}
-	history, err := s.History(ctx, id)
+	defer s.unlock(id)
+
+	conv, err := s.store.Get(ctx, id)
 	if err != nil {
 		return agent.Turn{}, err
 	}
-	built, err := s.Builder.Build(ctx, conv.AgentName)
+	history, lastID, err := s.store.History(ctx, id)
+	if err != nil {
+		return agent.Turn{}, err
+	}
+	var a agent.Runnable
+	if conv.Subagent != nil {
+		// Talking to a subagent directly, e.g. to inspect or steer it.
+		a, err = s.agents.BuildSpec(ctx, *conv.Subagent, 1)
+	} else {
+		a, err = s.agents.Build(ctx, conv.Agent)
+	}
 	if err != nil {
 		return agent.Turn{}, err
 	}
 
 	user := schema.UserMessage(text)
-	if err := s.save(ctx, s.Store.Queries, id, user, nil); err != nil {
-		return agent.Turn{}, err
-	}
-	if conv.Title == "" {
-		if err := s.Store.SetConversationTitle(ctx, db.SetConversationTitleParams{ID: id, Title: title(text)}); err != nil {
-			return agent.Turn{}, err
+	ctx = domain.WithConversation(ctx, id)
+	turn, runErr := a.Run(ctx, agent.Window(append(history, user), s.HistoryChars), onMessage)
+	produced := turn.Messages
+	if runErr != nil {
+		produced = agent.Settled(produced)
+		if !ranTools(produced) {
+			return turn, runErr
 		}
 	}
 
-	turn, err := built.Run(ctx, append(history, user), onMessage)
-	if err != nil {
+	var newTitle string
+	if conv.Title == "" {
+		newTitle = title(text)
+	}
+	// What happened has been paid for and its tools have had their effects;
+	// save it even if the caller has gone away.
+	msgs := append([]*schema.Message{user}, produced...)
+	if err := s.store.AppendTurn(context.WithoutCancel(ctx), id, lastID, msgs, a.Info().Version, newTitle); err != nil {
+		if runErr != nil {
+			return turn, fmt.Errorf("%w (and saving the partial turn failed: %v)", runErr, err)
+		}
 		return turn, err
 	}
-
-	err = pgx.BeginFunc(ctx, s.Store.Pool, func(tx pgx.Tx) error {
-		q := s.Store.WithTx(tx)
-		for _, m := range turn.Messages {
-			if err := s.save(ctx, q, id, m, &built.Version); err != nil {
-				return err
-			}
-		}
-		return q.TouchConversation(ctx, id)
-	})
-	return turn, err
+	return turn, runErr
 }
 
-func (s *Service) save(ctx context.Context, q *db.Queries, id uuid.UUID, m *schema.Message, version *int32) error {
-	raw, err := json.Marshal(m)
-	if err != nil {
-		return err
+func ranTools(msgs []*schema.Message) bool {
+	for _, m := range msgs {
+		if m.Role == schema.Tool {
+			return true
+		}
 	}
-	_, err = q.AddMessage(ctx, db.AddMessageParams{
-		ConversationID: id, Role: string(m.Role), Content: m.Content, Message: raw, AgentVersion: version,
-	})
-	return err
+	return false
+}
+
+func (s *Service) lock(id uuid.UUID) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.active[id] {
+		return false
+	}
+	s.active[id] = true
+	return true
+}
+
+func (s *Service) unlock(id uuid.UUID) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.active, id)
 }
 
 // title is the first line of the first message, cut to 60 characters.

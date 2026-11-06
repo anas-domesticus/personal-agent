@@ -64,15 +64,6 @@ func (q *Queries) CreateMemory(ctx context.Context, arg CreateMemoryParams) (Cre
 	return i, err
 }
 
-const deleteMemory = `-- name: DeleteMemory :exec
-delete from memories where id = $1
-`
-
-func (q *Queries) DeleteMemory(ctx context.Context, id uuid.UUID) error {
-	_, err := q.db.Exec(ctx, deleteMemory, id)
-	return err
-}
-
 const getMemory = `-- name: GetMemory :one
 select id, content, tags, source, metadata, embedding_model, created_at, updated_at
 from memories
@@ -107,7 +98,7 @@ func (q *Queries) GetMemory(ctx context.Context, id uuid.UUID) (GetMemoryRow, er
 }
 
 const listMemoriesMissingEmbedding = `-- name: ListMemoriesMissingEmbedding :many
-select id, content
+select id
 from memories
 where embedding is null or embedding_model is distinct from $1::text
 limit $2
@@ -118,24 +109,19 @@ type ListMemoriesMissingEmbeddingParams struct {
 	Lim   int32  `json:"lim"`
 }
 
-type ListMemoriesMissingEmbeddingRow struct {
-	ID      uuid.UUID `json:"id"`
-	Content string    `json:"content"`
-}
-
-func (q *Queries) ListMemoriesMissingEmbedding(ctx context.Context, arg ListMemoriesMissingEmbeddingParams) ([]ListMemoriesMissingEmbeddingRow, error) {
+func (q *Queries) ListMemoriesMissingEmbedding(ctx context.Context, arg ListMemoriesMissingEmbeddingParams) ([]uuid.UUID, error) {
 	rows, err := q.db.Query(ctx, listMemoriesMissingEmbedding, arg.Model, arg.Lim)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	items := []ListMemoriesMissingEmbeddingRow{}
+	items := []uuid.UUID{}
 	for rows.Next() {
-		var i ListMemoriesMissingEmbeddingRow
-		if err := rows.Scan(&i.ID, &i.Content); err != nil {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
 			return nil, err
 		}
-		items = append(items, i)
+		items = append(items, id)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
@@ -150,17 +136,18 @@ with semantic as (
         select id, embedding <=> $2::vector as distance
         from memories
         where $3::bool and embedding is not null
-          and (cardinality($4::text[]) = 0 or tags @> $4::text[])
+          and embedding_model = $4::text
+          and (cardinality($5::text[]) = 0 or tags @> $5::text[])
         order by embedding <=> $2::vector
-        limit $5::int
+        limit $6::int
     ) s
 ),
 keyword as (
     select id, row_number() over (order by ts_rank_cd(search, q) desc) as rank
-    from memories, websearch_to_tsquery('english', $6::text) q
+    from memories, websearch_to_tsquery('english', $7::text) q
     where search @@ q
-      and (cardinality($4::text[]) = 0 or tags @> $4::text[])
-    limit $5::int
+      and (cardinality($5::text[]) = 0 or tags @> $5::text[])
+    limit $6::int
 )
 select m.id, m.content, m.tags, m.source, m.metadata, m.created_at,
        (coalesce(1.0 / (60 + s.rank), 0) + coalesce(1.0 / (60 + k.rank), 0))::float8 as score
@@ -175,6 +162,7 @@ type SearchMemoriesParams struct {
 	Lim         int32           `json:"lim"`
 	Embedding   pgvector.Vector `json:"embedding"`
 	UseSemantic bool            `json:"use_semantic"`
+	Model       string          `json:"model"`
 	Tags        []string        `json:"tags"`
 	Candidates  int32           `json:"candidates"`
 	Query       string          `json:"query"`
@@ -191,13 +179,15 @@ type SearchMemoriesRow struct {
 }
 
 // Hybrid search: reciprocal rank fusion of vector similarity and full-text rank.
-// With use_semantic false, only the keyword side contributes.
+// With use_semantic false, only the keyword side contributes. Only vectors
+// from the query's embedding model are compared.
 // An empty tags array matches everything; otherwise memories must have all given tags.
 func (q *Queries) SearchMemories(ctx context.Context, arg SearchMemoriesParams) ([]SearchMemoriesRow, error) {
 	rows, err := q.db.Query(ctx, searchMemories,
 		arg.Lim,
 		arg.Embedding,
 		arg.UseSemantic,
+		arg.Model,
 		arg.Tags,
 		arg.Candidates,
 		arg.Query,
@@ -253,21 +243,4 @@ func (q *Queries) SetMemoryEmbedding(ctx context.Context, arg SetMemoryEmbedding
 		return 0, err
 	}
 	return result.RowsAffected(), nil
-}
-
-const updateMemoryContent = `-- name: UpdateMemoryContent :exec
-update memories
-set content = $2, embedding = null, embedding_model = null
-where id = $1
-`
-
-type UpdateMemoryContentParams struct {
-	ID      uuid.UUID `json:"id"`
-	Content string    `json:"content"`
-}
-
-// Clears the embedding so it is recomputed for the new text.
-func (q *Queries) UpdateMemoryContent(ctx context.Context, arg UpdateMemoryContentParams) error {
-	_, err := q.db.Exec(ctx, updateMemoryContent, arg.ID, arg.Content)
-	return err
 }

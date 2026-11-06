@@ -27,7 +27,6 @@ type AgentVersion struct {
 	Version      int32           `json:"version"`
 	SystemPrompt string          `json:"system_prompt"`
 	Model        string          `json:"model"`
-	Tools        []string        `json:"tools"`
 	Config       json.RawMessage `json:"config"`
 	Notes        string          `json:"notes"`
 	CreatedAt    time.Time       `json:"created_at"`
@@ -35,11 +34,13 @@ type AgentVersion struct {
 }
 
 type Conversation struct {
-	ID        uuid.UUID `json:"id"`
-	AgentID   uuid.UUID `json:"agent_id"`
-	Title     string    `json:"title"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
+	ID        uuid.UUID       `json:"id"`
+	AgentID   *uuid.UUID      `json:"agent_id"`
+	Title     string          `json:"title"`
+	CreatedAt time.Time       `json:"created_at"`
+	UpdatedAt time.Time       `json:"updated_at"`
+	ParentID  *uuid.UUID      `json:"parent_id"`
+	Subagent  json.RawMessage `json:"subagent"`
 }
 
 type Memory struct {

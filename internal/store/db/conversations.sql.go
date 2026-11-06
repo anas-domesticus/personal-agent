@@ -41,18 +41,25 @@ func (q *Queries) AddMessage(ctx context.Context, arg AddMessageParams) (int64, 
 }
 
 const createConversation = `-- name: CreateConversation :one
-insert into conversations (agent_id, title)
-values ($1, $2)
-returning id, agent_id, title, created_at, updated_at
+insert into conversations (agent_id, title, parent_id, subagent)
+values ($1, $2, $3, $4)
+returning id, agent_id, title, created_at, updated_at, parent_id, subagent
 `
 
 type CreateConversationParams struct {
-	AgentID uuid.UUID `json:"agent_id"`
-	Title   string    `json:"title"`
+	AgentID  *uuid.UUID      `json:"agent_id"`
+	Title    string          `json:"title"`
+	ParentID *uuid.UUID      `json:"parent_id"`
+	Subagent json.RawMessage `json:"subagent"`
 }
 
 func (q *Queries) CreateConversation(ctx context.Context, arg CreateConversationParams) (Conversation, error) {
-	row := q.db.QueryRow(ctx, createConversation, arg.AgentID, arg.Title)
+	row := q.db.QueryRow(ctx, createConversation,
+		arg.AgentID,
+		arg.Title,
+		arg.ParentID,
+		arg.Subagent,
+	)
 	var i Conversation
 	err := row.Scan(
 		&i.ID,
@@ -60,24 +67,28 @@ func (q *Queries) CreateConversation(ctx context.Context, arg CreateConversation
 		&i.Title,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ParentID,
+		&i.Subagent,
 	)
 	return i, err
 }
 
 const getConversation = `-- name: GetConversation :one
-select c.id, c.agent_id, c.title, c.created_at, c.updated_at, a.name as agent_name
+select c.id, c.agent_id, c.title, c.created_at, c.updated_at, c.parent_id, c.subagent, a.name as agent_name
 from conversations c
-join agents a on a.id = c.agent_id
+left join agents a on a.id = c.agent_id
 where c.id = $1
 `
 
 type GetConversationRow struct {
-	ID        uuid.UUID `json:"id"`
-	AgentID   uuid.UUID `json:"agent_id"`
-	Title     string    `json:"title"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
-	AgentName string    `json:"agent_name"`
+	ID        uuid.UUID       `json:"id"`
+	AgentID   *uuid.UUID      `json:"agent_id"`
+	Title     string          `json:"title"`
+	CreatedAt time.Time       `json:"created_at"`
+	UpdatedAt time.Time       `json:"updated_at"`
+	ParentID  *uuid.UUID      `json:"parent_id"`
+	Subagent  json.RawMessage `json:"subagent"`
+	AgentName *string         `json:"agent_name"`
 }
 
 func (q *Queries) GetConversation(ctx context.Context, id uuid.UUID) (GetConversationRow, error) {
@@ -89,28 +100,34 @@ func (q *Queries) GetConversation(ctx context.Context, id uuid.UUID) (GetConvers
 		&i.Title,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ParentID,
+		&i.Subagent,
 		&i.AgentName,
 	)
 	return i, err
 }
 
 const listConversations = `-- name: ListConversations :many
-select c.id, c.agent_id, c.title, c.created_at, c.updated_at, a.name as agent_name
+select c.id, c.agent_id, c.title, c.created_at, c.updated_at, c.parent_id, c.subagent, a.name as agent_name
 from conversations c
-join agents a on a.id = c.agent_id
+left join agents a on a.id = c.agent_id
+where c.parent_id is null and c.subagent is null
 order by c.updated_at desc
 limit $1
 `
 
 type ListConversationsRow struct {
-	ID        uuid.UUID `json:"id"`
-	AgentID   uuid.UUID `json:"agent_id"`
-	Title     string    `json:"title"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
-	AgentName string    `json:"agent_name"`
+	ID        uuid.UUID       `json:"id"`
+	AgentID   *uuid.UUID      `json:"agent_id"`
+	Title     string          `json:"title"`
+	CreatedAt time.Time       `json:"created_at"`
+	UpdatedAt time.Time       `json:"updated_at"`
+	ParentID  *uuid.UUID      `json:"parent_id"`
+	Subagent  json.RawMessage `json:"subagent"`
+	AgentName *string         `json:"agent_name"`
 }
 
+// Top-level conversations only; subagent conversations hang off them.
 func (q *Queries) ListConversations(ctx context.Context, limit int32) ([]ListConversationsRow, error) {
 	rows, err := q.db.Query(ctx, listConversations, limit)
 	if err != nil {
@@ -126,6 +143,8 @@ func (q *Queries) ListConversations(ctx context.Context, limit int32) ([]ListCon
 			&i.Title,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.ParentID,
+			&i.Subagent,
 			&i.AgentName,
 		); err != nil {
 			return nil, err
@@ -170,6 +189,22 @@ func (q *Queries) ListMessages(ctx context.Context, conversationID uuid.UUID) ([
 		return nil, err
 	}
 	return items, nil
+}
+
+const lockConversation = `-- name: LockConversation :one
+select coalesce((select max(m.id) from messages m where m.conversation_id = c.id), 0)::bigint as last_message_id
+from conversations c
+where c.id = $1
+for update of c
+`
+
+// Locks the conversation and returns its last message id (0 if none), so a
+// turn can check nothing was added while the agent was replying.
+func (q *Queries) LockConversation(ctx context.Context, id uuid.UUID) (int64, error) {
+	row := q.db.QueryRow(ctx, lockConversation, id)
+	var last_message_id int64
+	err := row.Scan(&last_message_id)
+	return last_message_id, err
 }
 
 const setConversationTitle = `-- name: SetConversationTitle :exec

@@ -4,6 +4,12 @@
 // vector. A periodic "embed_sweep" job finds rows with no embedding, or one
 // made by a different model, and queues "embed" jobs for them, so rows written
 // by any path are picked up.
+//
+// A stale vector is never written: the vector is only stored if the text is
+// still what was embedded, and a job that loses that race snoozes and embeds
+// the new text. An edit landing in the moment between a job's write and River
+// marking it complete is deduplicated against that job; the sweep picks it
+// up within SweepInterval.
 package embed
 
 import (
@@ -12,14 +18,15 @@ import (
 	"fmt"
 	"log/slog"
 	"time"
+	"unicode/utf8"
 
 	"github.com/cloudwego/eino/components/embedding"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/pgvector/pgvector-go"
 	"github.com/riverqueue/river"
+	"github.com/riverqueue/river/rivertype"
 
-	"github.com/anas-domesticus/personal-agent/internal/llm"
 	"github.com/anas-domesticus/personal-agent/internal/store/db"
 )
 
@@ -27,8 +34,15 @@ import (
 // embedder configured should work it.
 const Queue = "embeddings"
 
+// Dimensions is the vector size the schema stores.
+const Dimensions = 1536
+
 // SweepInterval is how often the sweep looks for rows to embed.
 const SweepInterval = 5 * time.Minute
+
+// maxChars keeps input well under embedding models' token limits (about
+// 8k tokens). Longer text is embedded from its start.
+const maxChars = 24000
 
 const sweepBatch = 500
 
@@ -47,10 +61,21 @@ type Args struct {
 
 func (Args) Kind() string { return "embed" }
 
+// A new job is a duplicate only of one that hasn't run yet or is running.
+// Completed jobs don't count, so an edit after an embed queues a fresh job.
+// A running job that embedded stale text snoozes and runs again.
 func (Args) InsertOpts() river.InsertOpts {
 	return river.InsertOpts{
-		Queue:      Queue,
-		UniqueOpts: river.UniqueOpts{ByArgs: true},
+		Queue: Queue,
+		UniqueOpts: river.UniqueOpts{
+			ByArgs: true,
+			ByState: []rivertype.JobState{
+				rivertype.JobStateAvailable,
+				rivertype.JobStatePending,
+				rivertype.JobStateRunning,
+				rivertype.JobStateScheduled,
+			},
+		},
 	}
 }
 
@@ -59,78 +84,112 @@ func WorkflowText(name, description string) string {
 	return name + "\n\n" + description
 }
 
-// Worker computes and stores one row's embedding.
-type Worker struct {
-	river.WorkerDefaults[Args]
-	Queries  *db.Queries
-	Embedder embedding.Embedder
-	Model    string
+// ErrDimensions means the embedding model returns vectors of the wrong size.
+var ErrDimensions = errors.New("embedding dimensions don't match")
+
+// Store is what the workers read and write.
+type Store interface {
+	GetWorkflowText(ctx context.Context, id uuid.UUID) (db.GetWorkflowTextRow, error)
+	SetWorkflowEmbedding(ctx context.Context, arg db.SetWorkflowEmbeddingParams) (int64, error)
+	GetMemory(ctx context.Context, id uuid.UUID) (db.GetMemoryRow, error)
+	SetMemoryEmbedding(ctx context.Context, arg db.SetMemoryEmbeddingParams) (int64, error)
+	ListWorkflowsMissingEmbedding(ctx context.Context, arg db.ListWorkflowsMissingEmbeddingParams) ([]uuid.UUID, error)
+	ListMemoriesMissingEmbedding(ctx context.Context, arg db.ListMemoriesMissingEmbeddingParams) ([]uuid.UUID, error)
 }
 
-func (w *Worker) Work(ctx context.Context, job *river.Job[Args]) error {
-	switch job.Args.Target {
-	case TargetWorkflow:
-		return w.workflow(ctx, job.Args.ID)
-	case TargetMemory:
-		return w.memory(ctx, job.Args.ID)
-	default:
-		return river.JobCancel(fmt.Errorf("unknown target %q", job.Args.Target))
+// Text embeds one text as a vector of the stored size.
+func Text(ctx context.Context, e embedding.Embedder, text string) (pgvector.Vector, error) {
+	if utf8.RuneCountInString(text) > maxChars {
+		text = string([]rune(text)[:maxChars])
 	}
-}
-
-func (w *Worker) workflow(ctx context.Context, id uuid.UUID) error {
-	row, err := w.Queries.GetWorkflowText(ctx, id)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return nil // deleted since the job was queued
-	}
-	if err != nil {
-		return err
-	}
-	vec, err := w.embed(ctx, WorkflowText(row.Name, row.Description))
-	if err != nil {
-		return err
-	}
-	n, err := w.Queries.SetWorkflowEmbedding(ctx, db.SetWorkflowEmbeddingParams{
-		ID: id, Name: row.Name, Description: row.Description,
-		Embedding: &vec, EmbeddingModel: &w.Model,
-	})
-	if err == nil && n == 0 {
-		slog.Debug("workflow changed while embedding; leaving it for the next job", "id", id)
-	}
-	return err
-}
-
-func (w *Worker) memory(ctx context.Context, id uuid.UUID) error {
-	row, err := w.Queries.GetMemory(ctx, id)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return nil
-	}
-	if err != nil {
-		return err
-	}
-	vec, err := w.embed(ctx, row.Content)
-	if err != nil {
-		return err
-	}
-	n, err := w.Queries.SetMemoryEmbedding(ctx, db.SetMemoryEmbeddingParams{
-		ID: id, Content: row.Content,
-		Embedding: &vec, EmbeddingModel: &w.Model,
-	})
-	if err == nil && n == 0 {
-		slog.Debug("memory changed while embedding; leaving it for the next job", "id", id)
-	}
-	return err
-}
-
-func (w *Worker) embed(ctx context.Context, text string) (pgvector.Vector, error) {
-	out, err := w.Embedder.EmbedStrings(ctx, []string{text})
+	out, err := e.EmbedStrings(ctx, []string{text})
 	if err != nil {
 		return pgvector.Vector{}, fmt.Errorf("embed: %w", err)
 	}
 	if len(out) != 1 {
 		return pgvector.Vector{}, fmt.Errorf("embed: got %d vectors, want 1", len(out))
 	}
-	return pgvector.NewVector(llm.Float32s(out[0])), nil
+	if len(out[0]) != Dimensions {
+		return pgvector.Vector{}, fmt.Errorf("%w: model returned %d, the schema stores %d", ErrDimensions, len(out[0]), Dimensions)
+	}
+	f := make([]float32, len(out[0]))
+	for i, x := range out[0] {
+		f[i] = float32(x)
+	}
+	return pgvector.NewVector(f), nil
+}
+
+// Worker computes and stores one row's embedding.
+type Worker struct {
+	river.WorkerDefaults[Args]
+	Store    Store
+	Embedder embedding.Embedder
+	Model    string
+}
+
+func (w *Worker) Work(ctx context.Context, job *river.Job[Args]) error {
+	var written int64
+	var err error
+	switch job.Args.Target {
+	case TargetWorkflow:
+		written, err = w.workflow(ctx, job.Args.ID)
+	case TargetMemory:
+		written, err = w.memory(ctx, job.Args.ID)
+	default:
+		return river.JobCancel(fmt.Errorf("unknown target %q", job.Args.Target))
+	}
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil // deleted since the job was queued
+	}
+	if err != nil {
+		return err
+	}
+	if written == 0 {
+		// The text changed while it was being embedded. A new job for the
+		// edit was deduplicated against this one, so run again.
+		slog.Debug("text changed while embedding; embedding again", "target", job.Args.Target, "id", job.Args.ID)
+		return river.JobSnooze(time.Second)
+	}
+	return nil
+}
+
+func (w *Worker) workflow(ctx context.Context, id uuid.UUID) (int64, error) {
+	row, err := w.Store.GetWorkflowText(ctx, id)
+	if err != nil {
+		return 0, err
+	}
+	vec, err := w.embed(ctx, WorkflowText(row.Name, row.Description))
+	if err != nil {
+		return 0, err
+	}
+	return w.Store.SetWorkflowEmbedding(ctx, db.SetWorkflowEmbeddingParams{
+		ID: id, Name: row.Name, Description: row.Description,
+		Embedding: &vec, EmbeddingModel: &w.Model,
+	})
+}
+
+func (w *Worker) memory(ctx context.Context, id uuid.UUID) (int64, error) {
+	row, err := w.Store.GetMemory(ctx, id)
+	if err != nil {
+		return 0, err
+	}
+	vec, err := w.embed(ctx, row.Content)
+	if err != nil {
+		return 0, err
+	}
+	return w.Store.SetMemoryEmbedding(ctx, db.SetMemoryEmbeddingParams{
+		ID: id, Content: row.Content,
+		Embedding: &vec, EmbeddingModel: &w.Model,
+	})
+}
+
+func (w *Worker) embed(ctx context.Context, text string) (pgvector.Vector, error) {
+	vec, err := Text(ctx, w.Embedder, text)
+	if errors.Is(err, ErrDimensions) {
+		// Retrying won't help: the configured model is wrong.
+		return vec, river.JobCancel(err)
+	}
+	return vec, err
 }
 
 // SweepArgs queues embed jobs for every row that needs one.
@@ -144,26 +203,26 @@ func (SweepArgs) InsertOpts() river.InsertOpts {
 
 type SweepWorker struct {
 	river.WorkerDefaults[SweepArgs]
-	Queries *db.Queries
-	Model   string
+	Store Store
+	Model string
 }
 
 func (w *SweepWorker) Work(ctx context.Context, _ *river.Job[SweepArgs]) error {
-	workflows, err := w.Queries.ListWorkflowsMissingEmbedding(ctx, db.ListWorkflowsMissingEmbeddingParams{Model: w.Model, Lim: sweepBatch})
+	workflows, err := w.Store.ListWorkflowsMissingEmbedding(ctx, db.ListWorkflowsMissingEmbeddingParams{Model: w.Model, Lim: sweepBatch})
 	if err != nil {
 		return err
 	}
-	memories, err := w.Queries.ListMemoriesMissingEmbedding(ctx, db.ListMemoriesMissingEmbeddingParams{Model: w.Model, Lim: sweepBatch})
+	memories, err := w.Store.ListMemoriesMissingEmbedding(ctx, db.ListMemoriesMissingEmbeddingParams{Model: w.Model, Lim: sweepBatch})
 	if err != nil {
 		return err
 	}
 
 	params := make([]river.InsertManyParams, 0, len(workflows)+len(memories))
-	for _, r := range workflows {
-		params = append(params, river.InsertManyParams{Args: Args{Target: TargetWorkflow, ID: r.ID}})
+	for _, id := range workflows {
+		params = append(params, river.InsertManyParams{Args: Args{Target: TargetWorkflow, ID: id}})
 	}
-	for _, r := range memories {
-		params = append(params, river.InsertManyParams{Args: Args{Target: TargetMemory, ID: r.ID}})
+	for _, id := range memories {
+		params = append(params, river.InsertManyParams{Args: Args{Target: TargetMemory, ID: id}})
 	}
 	if len(params) == 0 {
 		return nil
@@ -179,12 +238,12 @@ func (w *SweepWorker) Work(ctx context.Context, _ *river.Job[SweepArgs]) error {
 
 // Register adds the embedding workers, queue and periodic sweep to a River
 // client config.
-func Register(cfg *river.Config, queries *db.Queries, embedder embedding.Embedder, model string) {
+func Register(cfg *river.Config, store Store, embedder embedding.Embedder, model string) {
 	if cfg.Workers == nil {
 		cfg.Workers = river.NewWorkers()
 	}
-	river.AddWorker(cfg.Workers, &Worker{Queries: queries, Embedder: embedder, Model: model})
-	river.AddWorker(cfg.Workers, &SweepWorker{Queries: queries, Model: model})
+	river.AddWorker(cfg.Workers, &Worker{Store: store, Embedder: embedder, Model: model})
+	river.AddWorker(cfg.Workers, &SweepWorker{Store: store, Model: model})
 
 	if cfg.Queues == nil {
 		cfg.Queues = map[string]river.QueueConfig{}

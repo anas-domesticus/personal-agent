@@ -65,6 +65,14 @@ func Open(ctx context.Context, url string) (*Store, error) {
 	return &Store{Queries: db.New(pool), Pool: pool}, nil
 }
 
+// InTx runs fn in a transaction, with queries bound to it. The transaction
+// is also passed so jobs can be queued atomically with the writes.
+func (s *Store) InTx(ctx context.Context, fn func(q *db.Queries, tx pgx.Tx) error) error {
+	return pgx.BeginFunc(ctx, s.Pool, func(tx pgx.Tx) error {
+		return fn(s.WithTx(tx), tx)
+	})
+}
+
 // Close releases the connection pool.
 func (s *Store) Close() { s.Pool.Close() }
 

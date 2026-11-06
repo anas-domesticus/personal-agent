@@ -1,4 +1,4 @@
-package runner_test
+package runs_test
 
 import (
 	"context"
@@ -12,9 +12,8 @@ import (
 	"github.com/cloudwego/eino/schema"
 	"github.com/google/uuid"
 
-	"github.com/anas-domesticus/personal-agent/internal/agent"
-	"github.com/anas-domesticus/personal-agent/internal/catalog"
-	"github.com/anas-domesticus/personal-agent/internal/runs"
+	"github.com/anas-domesticus/personal-agent/internal/domain"
+	"github.com/anas-domesticus/personal-agent/internal/store/db"
 	"github.com/anas-domesticus/personal-agent/internal/testenv"
 	"github.com/anas-domesticus/personal-agent/internal/workflow"
 )
@@ -30,19 +29,19 @@ func lastUser(msgs []*schema.Message) string {
 	return ""
 }
 
-func waitRun(t *testing.T, e *testenv.Env, id uuid.UUID) catalog.RunDetail {
+func waitRun(t *testing.T, e *testenv.Env, id uuid.UUID) domain.RunDetail {
 	t.Helper()
 	deadline := time.Now().Add(30 * time.Second)
 	for {
-		r, err := e.Catalog.GetRun(context.Background(), id)
+		r, err := e.Runs.Get(context.Background(), id)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if runs.Terminal(r.Run.Status) {
+		if r.Status.Terminal() {
 			return r
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("run %s still %s", id, r.Run.Status)
+			t.Fatalf("run %s still %s", id, r.Status)
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
@@ -68,29 +67,29 @@ func TestRunWorkflow(t *testing.T) {
 		return schema.AssistantMessage("missing input", nil)
 	})
 
-	ok(t)(e.Catalog.CreateAgent(ctx, "ranker", "ranks", catalog.AgentVersionInput{
+	ok(t)(e.Agents.Create(ctx, "ranker", "ranks", domain.AgentVersionInput{
 		SystemPrompt: "Rank.", Model: "fake/ranker", OutputSchema: json.RawMessage(rankSchema),
 	}))
-	ok(t)(e.Catalog.CreateAgent(ctx, "writer", "writes", catalog.AgentVersionInput{
+	ok(t)(e.Agents.Create(ctx, "writer", "writes", domain.AgentVersionInput{
 		SystemPrompt: "Write.", Model: "fake/writer",
 	}))
 	graph := workflow.Graph{
 		Nodes: []workflow.Node{{ID: "rank", Agent: "ranker", Instruction: "Rank the emails."}, {ID: "write", Agent: "writer"}},
 		Edges: []workflow.Edge{{From: "rank", To: "write"}},
 	}
-	ok(t)(e.Catalog.CreateWorkflow(ctx, "triage", "Rank and summarise", graph, ""))
+	ok(t)(e.Workflows.Create(ctx, "triage", "Rank and summarise", graph, ""))
 
-	id, err := e.Catalog.StartRun(ctx, "triage", json.RawMessage(`{"day":"mon"}`), "user")
+	id, err := e.Runs.Start(ctx, "triage", json.RawMessage(`{"day":"mon"}`), "user")
 	if err != nil {
 		t.Fatal(err)
 	}
 	r := waitRun(t, e, id)
 
-	if r.Run.Status != runs.StatusSucceeded {
-		t.Fatalf("status = %s, error = %v", r.Run.Status, deref(r.Run.Error))
+	if r.Status != domain.RunSucceeded {
+		t.Fatalf("status = %s, error = %v", r.Status, r.Error)
 	}
-	if !jsonEqual(r.Run.Output, `{"write":{"text":"got ranking"}}`) {
-		t.Fatalf("output = %s", r.Run.Output)
+	if !jsonEqual(r.Output, `{"write":{"text":"got ranking"}}`) {
+		t.Fatalf("output = %s", r.Output)
 	}
 	if len(r.Steps) != 2 {
 		t.Fatalf("steps = %d", len(r.Steps))
@@ -100,7 +99,7 @@ func TestRunWorkflow(t *testing.T) {
 		t.Fatalf("rank step = %s v%d", rank.Output, *rank.AgentVersion)
 	}
 	var transcript []*schema.Message
-	if err := json.Unmarshal(rank.Messages, &transcript); err != nil {
+	if err := json.Unmarshal(rank.Transcript, &transcript); err != nil {
 		t.Fatal(err)
 	}
 	// prompt, prose reply, correction, JSON reply
@@ -109,10 +108,10 @@ func TestRunWorkflow(t *testing.T) {
 	}
 
 	t.Run("nodes use the agent's current version", func(t *testing.T) {
-		ok(t)(e.Catalog.AddAgentVersion(ctx, "writer", catalog.AgentVersionInput{
+		ok(t)(e.Agents.AddVersion(ctx, "writer", domain.AgentVersionInput{
 			SystemPrompt: "Write better.", Model: "fake/writer", Notes: "v2",
 		}, true))
-		id, err := e.Catalog.StartRun(ctx, "triage", json.RawMessage(`{"day":"mon"}`), "user")
+		id, err := e.Runs.Start(ctx, "triage", json.RawMessage(`{"day":"mon"}`), "user")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -124,46 +123,43 @@ func TestRunWorkflow(t *testing.T) {
 
 	t.Run("a node that never matches its schema fails the run", func(t *testing.T) {
 		e.SetModel("fake/stubborn", func([]*schema.Message) *schema.Message { return schema.AssistantMessage("no", nil) })
-		ok(t)(e.Catalog.CreateAgent(ctx, "stubborn", "x", catalog.AgentVersionInput{
+		ok(t)(e.Agents.Create(ctx, "stubborn", "x", domain.AgentVersionInput{
 			SystemPrompt: "x", Model: "fake/stubborn", OutputSchema: json.RawMessage(rankSchema),
 		}))
-		ok(t)(e.Catalog.CreateWorkflow(ctx, "doomed", "x", workflow.Graph{
+		ok(t)(e.Workflows.Create(ctx, "doomed", "x", workflow.Graph{
 			Nodes: []workflow.Node{{ID: "s", Agent: "stubborn"}, {ID: "after", Agent: "writer"}},
 			Edges: []workflow.Edge{{From: "s", To: "after"}},
 		}, ""))
-		id, err := e.Catalog.StartRun(ctx, "doomed", nil, "user")
+		id, err := e.Runs.Start(ctx, "doomed", nil, "user")
 		if err != nil {
 			t.Fatal(err)
 		}
 		r := waitRun(t, e, id)
-		if r.Run.Status != runs.StatusFailed || !strings.Contains(deref(r.Run.Error), "node s") {
-			t.Fatalf("status = %s, error = %q", r.Run.Status, deref(r.Run.Error))
+		if r.Status != domain.RunFailed || !strings.Contains(r.Error, "node s") {
+			t.Fatalf("status = %s, error = %q", r.Status, r.Error)
 		}
-		if len(r.Steps) != 1 || r.Steps[0].Status != runs.StatusFailed {
+		if len(r.Steps) != 1 || r.Steps[0].Status != domain.RunFailed {
 			t.Fatalf("downstream node should not run: %d steps", len(r.Steps))
 		}
 	})
 
 	t.Run("admin tools start and inspect runs", func(t *testing.T) {
-		admin, err := e.Builder.Build(ctx, agent.AdminName)
-		if err != nil {
-			t.Fatal(err)
-		}
-		res := call(t, admin.Tools, "run_workflow", `{"name": "triage", "input": {"day": "mon"}, "wait_seconds": 30}`)
+		adminTools := e.Tools.For(nil, true)
+		res := call(t, adminTools, "run_workflow", `{"name": "triage", "input": {"day": "mon"}, "wait_seconds": 30}`)
 		data := res["data"].(map[string]any)
-		if data["status"] != runs.StatusSucceeded || len(data["steps"].([]any)) != 2 {
+		if data["status"] != "succeeded" || len(data["steps"].([]any)) != 2 {
 			t.Fatalf("run_workflow = %v", res)
 		}
 		if _, ok := data["steps"].([]any)[0].(map[string]any)["transcript"]; ok {
 			t.Fatal("transcripts should be omitted by default")
 		}
 
-		res = call(t, admin.Tools, "list_runs", `{"workflow": "triage"}`)
+		res = call(t, adminTools, "list_runs", `{"workflow": "triage"}`)
 		if n := len(res["data"].([]any)); n != 3 {
 			t.Fatalf("list_runs = %d runs, want 3", n)
 		}
 
-		res = call(t, admin.Tools, "run_workflow", `{"name": "nope"}`)
+		res = call(t, adminTools, "run_workflow", `{"name": "nope"}`)
 		if res["ok"] != false {
 			t.Fatalf("expected error for unknown workflow: %v", res)
 		}
@@ -201,13 +197,6 @@ func ok(t *testing.T) func(any, error) {
 	}
 }
 
-func deref(s *string) string {
-	if s == nil {
-		return ""
-	}
-	return *s
-}
-
 func jsonEqual(got []byte, want string) bool {
 	var a, b any
 	if json.Unmarshal(got, &a) != nil || json.Unmarshal([]byte(want), &b) != nil {
@@ -216,4 +205,56 @@ func jsonEqual(got []byte, want string) bool {
 	ab, _ := json.Marshal(a)
 	bb, _ := json.Marshal(b)
 	return string(ab) == string(bb)
+}
+
+func TestReapInterruptedRuns(t *testing.T) {
+	e := testenv.New(t, "fake/admin")
+	ctx := context.Background()
+
+	ok(t)(e.Agents.Create(ctx, "solo", "x", domain.AgentVersionInput{SystemPrompt: "x", Model: "fake/solo"}))
+	ok(t)(e.Workflows.Create(ctx, "solo-flow", "x", workflow.Graph{Nodes: []workflow.Node{{ID: "a", Agent: "solo"}}}, ""))
+	w, err := e.Workflows.Get(ctx, "solo-flow")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// A run whose worker died mid-step: running, with a running step, and no
+	// job left in the queue.
+	orphan, err := e.Store.CreateRun(ctx, db.CreateRunParams{WorkflowID: w.ID, WorkflowVersion: 1, Input: json.RawMessage(`{}`)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.Store.StartRun(ctx, orphan.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.Store.CreateRunStep(ctx, db.CreateRunStepParams{RunID: orphan.ID, NodeID: "a", Input: json.RawMessage(`{}`)}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.Store.Pool.Exec(ctx, `update runs set created_at = now() - interval '2 minutes' where id = $1`, orphan.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	// A healthy run must be left alone.
+	healthy, err := e.Runs.Start(ctx, "solo-flow", nil, "user")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	n, err := e.Runs.Reap(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		t.Fatalf("reaped %d runs, want 1", n)
+	}
+	r, err := e.Runs.Get(ctx, orphan.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Status != domain.RunFailed || !strings.Contains(r.Error, "interrupted") || r.Steps[0].Status != domain.RunFailed {
+		t.Fatalf("orphan = %s %q, step %s", r.Status, r.Error, r.Steps[0].Status)
+	}
+	if got := waitRun(t, e, healthy); got.Status != domain.RunSucceeded {
+		t.Fatalf("healthy run = %s %q", got.Status, got.Error)
+	}
 }

@@ -3,6 +3,8 @@ package mcp_test
 import (
 	"context"
 	"encoding/json"
+	"net"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -11,6 +13,7 @@ import (
 	"github.com/mark3labs/mcp-go/server"
 
 	"github.com/anas-domesticus/personal-agent/internal/config"
+	"github.com/anas-domesticus/personal-agent/internal/tools/kit"
 	toolsmcp "github.com/anas-domesticus/personal-agent/internal/tools/mcp"
 )
 
@@ -75,9 +78,16 @@ func TestConnect(t *testing.T) {
 		t.Fatalf("missing variable not reported: %+v", status["nokey"])
 	}
 
-	names, ok := set.ServerTools("test")
+	ts, ok := set.ServerTools("test")
+	var names []string
+	for _, tl := range ts {
+		names = append(names, kit.Name(tl))
+	}
 	if !ok || strings.Join(names, ",") != "test__echo,test__fail" {
 		t.Fatalf("tool names = %v", names)
+	}
+	if !set.Configured("down") || set.Configured("nope") {
+		t.Fatal("Configured should report every enabled server, connected or not")
 	}
 	if _, ok := set.ServerTools("down"); ok {
 		t.Fatal("down server should not be listed as connected")
@@ -109,5 +119,94 @@ func TestConnect(t *testing.T) {
 	}
 	if res.OK || !strings.Contains(res.Error, "always fails") {
 		t.Fatalf("fail result = %+v", res)
+	}
+}
+
+func TestReconnect(t *testing.T) {
+	// Reserve a port, then start the server on it only after connecting
+	// has failed once.
+	s := server.NewMCPServer("late", "1.0")
+	s.AddTool(mcp.NewTool("ping"), func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		return mcp.NewToolResultText("pong"), nil
+	})
+	ts := server.NewTestStreamableHTTPServer(s)
+	url := ts.URL + "/mcp"
+	ts.Close()
+
+	set := connect(t, map[string]config.MCPServer{"late": {Transport: config.TransportHTTP, URL: url, Timeout: time.Second}})
+	if _, ok := set.ServerTools("late"); ok {
+		t.Fatal("server should start disconnected")
+	}
+
+	ts = restartOn(t, s, url)
+	defer ts.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go set.Maintain(ctx, 50*time.Millisecond)
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		if tl, ok := set.Tool("late__ping"); ok {
+			out, err := tl.InvokableRun(context.Background(), `{}`)
+			if err != nil || !strings.Contains(out, "pong") {
+				t.Fatalf("ping = %q, %v", out, err)
+			}
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("not reconnected: %+v", set.Status())
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
+// restartOn serves s at the host and port of url.
+func restartOn(t *testing.T, s *server.MCPServer, url string) *httptest.Server {
+	t.Helper()
+	addr := strings.TrimSuffix(strings.TrimPrefix(url, "http://"), "/mcp")
+	l, err := net.Listen("tcp", addr)
+	if err != nil {
+		t.Skipf("port %s was taken: %v", addr, err)
+	}
+	ts := httptest.NewUnstartedServer(server.NewStreamableHTTPServer(s))
+	ts.Listener.Close()
+	ts.Listener = l
+	ts.Start()
+	return ts
+}
+
+func TestOutputIsCapped(t *testing.T) {
+	s := server.NewMCPServer("big", "1.0")
+	s.AddTool(mcp.NewTool("dump"), func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		return mcp.NewToolResultText(strings.Repeat("x", 3*kit.MaxOutput)), nil
+	})
+	ts := server.NewTestStreamableHTTPServer(s)
+	t.Cleanup(ts.Close)
+	set := connect(t, map[string]config.MCPServer{"big": {Transport: config.TransportHTTP, URL: ts.URL + "/mcp"}})
+	tl, ok := set.Tool("big__dump")
+	if !ok {
+		t.Fatal("tool missing")
+	}
+	out, err := tl.InvokableRun(context.Background(), `{}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(out) > kit.MaxOutput+300 || !strings.Contains(out, "truncated") {
+		t.Fatalf("output not capped: %d chars", len(out))
+	}
+}
+
+func TestStdioEnvIsMinimal(t *testing.T) {
+	t.Setenv("OPENROUTER_API_KEY", "secret-should-not-leak")
+	cmd, err := toolsmcp.MinimalEnvCommand(context.Background(), "env", []string{"WANTED=1"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	env := strings.Join(cmd.Env, "\n")
+	if strings.Contains(env, "secret-should-not-leak") {
+		t.Fatal("stdio server inherited OPENROUTER_API_KEY")
+	}
+	if !strings.Contains(env, "WANTED=1") || !strings.Contains(env, "PATH=") {
+		t.Fatalf("env = %v", cmd.Env)
 	}
 }

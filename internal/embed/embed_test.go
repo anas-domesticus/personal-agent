@@ -81,4 +81,87 @@ func TestSweepEmbedsMissingRows(t *testing.T) {
 	if len(missing) != 0 {
 		t.Fatalf("still missing: %+v", missing)
 	}
+
+	// An edit after a completed embed job must be embedded again, even
+	// though the completed job is still in the queue table. (River records
+	// completion asynchronously, so wait for it.)
+	waitFor(t, func() bool {
+		var n int
+		err := st.Pool.QueryRow(ctx, `select count(*) from river_job where kind = 'embed' and args->>'id' = $1 and state = 'completed'`, w.ID.String()).Scan(&n)
+		return err == nil && n == 1
+	})
+	if err := st.UpdateWorkflowDescription(ctx, db.UpdateWorkflowDescriptionParams{ID: w.ID, Description: "Dim the hall lights at bedtime"}); err != nil {
+		t.Fatal(err)
+	}
+	res, err := client.Insert(ctx, embed.Args{Target: embed.TargetWorkflow, ID: w.ID}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.UniqueSkippedAsDuplicate {
+		t.Fatal("re-embed job was deduplicated against the completed one")
+	}
+	waitFor(t, func() bool {
+		wf, err := st.GetWorkflowByName(ctx, w.Name)
+		return err == nil && wf.EmbeddingModel != nil
+	})
+}
+
+func waitFor(t *testing.T, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(30 * time.Second)
+	for !cond() {
+		if time.Now().After(deadline) {
+			t.Fatal("condition not met in time")
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+}
+
+// changingStore changes a workflow's description the first time it is
+// embedded, as a concurrent edit would.
+type changingStore struct {
+	embed.Store
+	once func()
+}
+
+func (c *changingStore) SetWorkflowEmbedding(ctx context.Context, p db.SetWorkflowEmbeddingParams) (int64, error) {
+	if c.once != nil {
+		c.once()
+		c.once = nil
+	}
+	return c.Store.SetWorkflowEmbedding(ctx, p)
+}
+
+func TestEditDuringEmbedIsEmbedded(t *testing.T) {
+	st, _ := testdb.Open(t)
+	ctx := context.Background()
+	w, err := st.CreateWorkflow(ctx, db.CreateWorkflowParams{Name: "plants", Description: "Water the plants"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := &changingStore{Store: st.Queries, once: func() {
+		if err := st.UpdateWorkflowDescription(ctx, db.UpdateWorkflowDescriptionParams{ID: w.ID, Description: "Water the plants twice a week"}); err != nil {
+			t.Error(err)
+		}
+	}}
+
+	cfg := &river.Config{}
+	embed.Register(cfg, store, fakeEmbedder{}, "test-model")
+	client, err := river.NewClient[pgx.Tx](riverpgxv5.New(st.Pool), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := client.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = client.Stop(context.Background()) })
+
+	// The first attempt embeds the old text, loses the race, and snoozes;
+	// the retry embeds the new text.
+	waitFor(t, func() bool {
+		var desc string
+		var model *string
+		err := st.Pool.QueryRow(ctx, `select description, embedding_model from workflows where id = $1`, w.ID).Scan(&desc, &model)
+		return err == nil && model != nil && desc == "Water the plants twice a week"
+	})
 }

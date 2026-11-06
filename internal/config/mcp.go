@@ -61,8 +61,9 @@ const (
 )
 
 // ServerNamePattern keeps tool names (<server>__<tool>) within what model
-// APIs accept.
-var ServerNamePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,23}$`)
+// APIs accept. Underscores aren't allowed, so the "__" separator is never
+// ambiguous.
+var ServerNamePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,23}$`)
 
 // LoadMCP reads and validates an MCP file. A missing file is not an error.
 func LoadMCP(path string) (MCP, error) {

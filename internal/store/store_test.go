@@ -37,7 +37,7 @@ func TestStore(t *testing.T) {
 		for i, prompt := range []string{"Summarise.", "Summarise in three bullets."} {
 			v, err := st.CreateAgentVersion(ctx, db.CreateAgentVersionParams{
 				AgentID: a.ID, SystemPrompt: prompt, Model: "openai/gpt-4.1-mini",
-				Tools: []string{}, Config: json.RawMessage(`{}`),
+				Config: json.RawMessage(`{}`),
 			})
 			if err != nil {
 				t.Fatal(err)
@@ -101,7 +101,7 @@ func TestStore(t *testing.T) {
 		}
 
 		// Keyword-only hit: evening-lights has no embedding.
-		got, err := st.SearchWorkflows(ctx, db.SearchWorkflowsParams{UseSemantic: true, Embedding: vec(1, 0), Query: "lights", Candidates: 10, Lim: 5})
+		got, err := st.SearchWorkflows(ctx, db.SearchWorkflowsParams{UseSemantic: true, Embedding: vec(1, 0), Model: "test", Query: "lights", Candidates: 10, Lim: 5})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -113,8 +113,21 @@ func TestStore(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if len(missing) != 1 || missing[0].Name != "evening-lights" {
+		lights, err := st.GetWorkflowByName(ctx, "evening-lights")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(missing) != 1 || missing[0] != lights.ID {
 			t.Fatalf("missing = %+v", missing)
+		}
+
+		// Vectors from another embedding model are never compared.
+		other, err := st.SearchWorkflows(ctx, db.SearchWorkflowsParams{UseSemantic: true, Embedding: vec(1, 0), Model: "other", Query: "zzz", Candidates: 10, Lim: 5})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(other) != 0 {
+			t.Fatalf("matched vectors from another model: %v", workflowNames(other))
 		}
 	})
 
@@ -133,7 +146,7 @@ func TestStore(t *testing.T) {
 		add("Weekly planning happens on Monday mornings", []string{"work"}, vec(0, 1))
 
 		// Semantic nearest to (1,0) should rank the boiler memory first.
-		got, err := st.SearchMemories(ctx, db.SearchMemoriesParams{UseSemantic: true, Embedding: vec(1, 0), Query: "boiler", Tags: []string{}, Candidates: 10, Lim: 3})
+		got, err := st.SearchMemories(ctx, db.SearchMemoriesParams{UseSemantic: true, Embedding: vec(1, 0), Model: "test", Query: "boiler", Tags: []string{}, Candidates: 10, Lim: 3})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -142,7 +155,7 @@ func TestStore(t *testing.T) {
 		}
 
 		// Tag filter excludes the work memory even though it matches the vector.
-		got, err = st.SearchMemories(ctx, db.SearchMemoriesParams{UseSemantic: true, Embedding: vec(0, 1), Query: "planning", Tags: []string{"home"}, Candidates: 10, Lim: 5})
+		got, err = st.SearchMemories(ctx, db.SearchMemoriesParams{UseSemantic: true, Embedding: vec(0, 1), Model: "test", Query: "planning", Tags: []string{"home"}, Candidates: 10, Lim: 5})
 		if err != nil {
 			t.Fatal(err)
 		}

@@ -38,21 +38,48 @@ func (q *Queries) CreateAgent(ctx context.Context, arg CreateAgentParams) (Agent
 	return i, err
 }
 
+const createAgentIfMissing = `-- name: CreateAgentIfMissing :one
+insert into agents (name, description)
+values ($1, $2)
+on conflict (name) do nothing
+returning id, name, description, current_version, created_at, updated_at, admin
+`
+
+type CreateAgentIfMissingParams struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
+}
+
+// Returns no row if an agent with this name already exists.
+func (q *Queries) CreateAgentIfMissing(ctx context.Context, arg CreateAgentIfMissingParams) (Agent, error) {
+	row := q.db.QueryRow(ctx, createAgentIfMissing, arg.Name, arg.Description)
+	var i Agent
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.Description,
+		&i.CurrentVersion,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Admin,
+	)
+	return i, err
+}
+
 const createAgentVersion = `-- name: CreateAgentVersion :one
-insert into agent_versions (agent_id, version, system_prompt, model, tools, config, output_schema, notes)
+insert into agent_versions (agent_id, version, system_prompt, model, config, output_schema, notes)
 select $1, coalesce(max(version), 0) + 1,
-       $2, $3, $4::text[],
-       $5, $6, $7
+       $2, $3,
+       $4, $5, $6
 from agent_versions
 where agent_id = $1
-returning agent_id, version, system_prompt, model, tools, config, notes, created_at, output_schema
+returning agent_id, version, system_prompt, model, config, notes, created_at, output_schema
 `
 
 type CreateAgentVersionParams struct {
 	AgentID      uuid.UUID       `json:"agent_id"`
 	SystemPrompt string          `json:"system_prompt"`
 	Model        string          `json:"model"`
-	Tools        []string        `json:"tools"`
 	Config       json.RawMessage `json:"config"`
 	OutputSchema json.RawMessage `json:"output_schema"`
 	Notes        string          `json:"notes"`
@@ -64,7 +91,6 @@ func (q *Queries) CreateAgentVersion(ctx context.Context, arg CreateAgentVersion
 		arg.AgentID,
 		arg.SystemPrompt,
 		arg.Model,
-		arg.Tools,
 		arg.Config,
 		arg.OutputSchema,
 		arg.Notes,
@@ -75,7 +101,6 @@ func (q *Queries) CreateAgentVersion(ctx context.Context, arg CreateAgentVersion
 		&i.Version,
 		&i.SystemPrompt,
 		&i.Model,
-		&i.Tools,
 		&i.Config,
 		&i.Notes,
 		&i.CreatedAt,
@@ -105,8 +130,31 @@ func (q *Queries) GetAgentByName(ctx context.Context, name string) (Agent, error
 	return i, err
 }
 
+const getAgentByNameForUpdate = `-- name: GetAgentByNameForUpdate :one
+select id, name, description, current_version, created_at, updated_at, admin
+from agents
+where name = $1
+for update
+`
+
+// Locks the agent so concurrent version writes are serialised.
+func (q *Queries) GetAgentByNameForUpdate(ctx context.Context, name string) (Agent, error) {
+	row := q.db.QueryRow(ctx, getAgentByNameForUpdate, name)
+	var i Agent
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.Description,
+		&i.CurrentVersion,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Admin,
+	)
+	return i, err
+}
+
 const getAgentVersion = `-- name: GetAgentVersion :one
-select agent_id, version, system_prompt, model, tools, config, notes, created_at, output_schema from agent_versions where agent_id = $1 and version = $2
+select agent_id, version, system_prompt, model, config, notes, created_at, output_schema from agent_versions where agent_id = $1 and version = $2
 `
 
 type GetAgentVersionParams struct {
@@ -122,7 +170,6 @@ func (q *Queries) GetAgentVersion(ctx context.Context, arg GetAgentVersionParams
 		&i.Version,
 		&i.SystemPrompt,
 		&i.Model,
-		&i.Tools,
 		&i.Config,
 		&i.Notes,
 		&i.CreatedAt,
@@ -164,7 +211,7 @@ func (q *Queries) GetAgentsByNames(ctx context.Context, names []string) ([]Agent
 }
 
 const getCurrentAgentVersion = `-- name: GetCurrentAgentVersion :one
-select v.agent_id, v.version, v.system_prompt, v.model, v.tools, v.config, v.notes, v.created_at, v.output_schema
+select v.agent_id, v.version, v.system_prompt, v.model, v.config, v.notes, v.created_at, v.output_schema
 from agents a
 join agent_versions v on v.agent_id = a.id and v.version = a.current_version
 where a.name = $1
@@ -178,7 +225,6 @@ func (q *Queries) GetCurrentAgentVersion(ctx context.Context, name string) (Agen
 		&i.Version,
 		&i.SystemPrompt,
 		&i.Model,
-		&i.Tools,
 		&i.Config,
 		&i.Notes,
 		&i.CreatedAt,
@@ -188,7 +234,7 @@ func (q *Queries) GetCurrentAgentVersion(ctx context.Context, name string) (Agen
 }
 
 const listAgentVersions = `-- name: ListAgentVersions :many
-select agent_id, version, system_prompt, model, tools, config, notes, created_at, output_schema from agent_versions where agent_id = $1 order by version desc
+select agent_id, version, system_prompt, model, config, notes, created_at, output_schema from agent_versions where agent_id = $1 order by version desc
 `
 
 func (q *Queries) ListAgentVersions(ctx context.Context, agentID uuid.UUID) ([]AgentVersion, error) {
@@ -205,7 +251,6 @@ func (q *Queries) ListAgentVersions(ctx context.Context, agentID uuid.UUID) ([]A
 			&i.Version,
 			&i.SystemPrompt,
 			&i.Model,
-			&i.Tools,
 			&i.Config,
 			&i.Notes,
 			&i.CreatedAt,
@@ -256,7 +301,7 @@ func (q *Queries) ListAgents(ctx context.Context) ([]Agent, error) {
 }
 
 const setAgentAdmin = `-- name: SetAgentAdmin :exec
-update agents set admin = $2 where id = $1
+update agents set admin = $2 where id = $1 and admin <> $2
 `
 
 type SetAgentAdminParams struct {
@@ -264,7 +309,7 @@ type SetAgentAdminParams struct {
 	Admin bool      `json:"admin"`
 }
 
-// Not exposed as a tool.
+// Not exposed as a tool. Only writes when the flag changes.
 func (q *Queries) SetAgentAdmin(ctx context.Context, arg SetAgentAdminParams) error {
 	_, err := q.db.Exec(ctx, setAgentAdmin, arg.ID, arg.Admin)
 	return err
@@ -281,19 +326,5 @@ type SetAgentCurrentVersionParams struct {
 
 func (q *Queries) SetAgentCurrentVersion(ctx context.Context, arg SetAgentCurrentVersionParams) error {
 	_, err := q.db.Exec(ctx, setAgentCurrentVersion, arg.ID, arg.CurrentVersion)
-	return err
-}
-
-const updateAgentDescription = `-- name: UpdateAgentDescription :exec
-update agents set description = $2 where id = $1
-`
-
-type UpdateAgentDescriptionParams struct {
-	ID          uuid.UUID `json:"id"`
-	Description string    `json:"description"`
-}
-
-func (q *Queries) UpdateAgentDescription(ctx context.Context, arg UpdateAgentDescriptionParams) error {
-	_, err := q.db.Exec(ctx, updateAgentDescription, arg.ID, arg.Description)
 	return err
 }

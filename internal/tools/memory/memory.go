@@ -3,30 +3,27 @@ package memory
 
 import (
 	"context"
-	"time"
 
 	"github.com/cloudwego/eino/components/tool"
 	"github.com/google/uuid"
 
-	"github.com/anas-domesticus/personal-agent/internal/catalog"
+	"github.com/anas-domesticus/personal-agent/internal/domain"
 	"github.com/anas-domesticus/personal-agent/internal/tools/kit"
 )
 
-func Tools(c *catalog.Catalog) ([]tool.InvokableTool, error) {
+// Store is where memories live. *catalog.Memories implements it.
+type Store interface {
+	Remember(ctx context.Context, content string, tags []string, source string) (uuid.UUID, error)
+	Search(ctx context.Context, query string, tags []string, limit int32) ([]domain.MemoryMatch, error)
+}
+
+func Tools(s Store) ([]tool.InvokableTool, error) {
 	return kit.Build(
 		func() (tool.InvokableTool, error) {
 			return kit.New("search_memories",
 				"Search long-term memory by meaning and keywords. Returns the best matches first.",
-				func(ctx context.Context, in searchIn) ([]memoryOut, error) {
-					rows, err := c.SearchMemories(ctx, in.Query, in.Tags, kit.Limit(in.Limit, 10))
-					if err != nil {
-						return nil, err
-					}
-					out := make([]memoryOut, len(rows))
-					for i, r := range rows {
-						out[i] = memoryOut{ID: r.ID, Content: r.Content, Tags: r.Tags, Source: r.Source, CreatedAt: r.CreatedAt, Score: r.Score}
-					}
-					return out, nil
+				func(ctx context.Context, in searchIn) ([]domain.MemoryMatch, error) {
+					return s.Search(ctx, in.Query, in.Tags, kit.Limit(in.Limit, 10))
 				})
 		},
 		func() (tool.InvokableTool, error) {
@@ -34,10 +31,10 @@ func Tools(c *catalog.Catalog) ([]tool.InvokableTool, error) {
 				"Save a fact, preference or observation to long-term memory. Keep each memory to one self-contained statement.",
 				func(ctx context.Context, in rememberIn) (rememberOut, error) {
 					source := "agent"
-					if name := kit.Agent(ctx); name != "" {
+					if name := domain.Caller(ctx); name != "" {
 						source = "agent:" + name
 					}
-					id, err := c.Remember(ctx, in.Content, in.Tags, source)
+					id, err := s.Remember(ctx, in.Content, in.Tags, source)
 					return rememberOut{ID: id}, err
 				})
 		},
@@ -48,15 +45,6 @@ type searchIn struct {
 	Query string   `json:"query" jsonschema_description:"What to look for, in natural language."`
 	Tags  []string `json:"tags,omitempty" jsonschema_description:"Only return memories that have all of these tags."`
 	Limit int32    `json:"limit,omitempty" jsonschema_description:"Maximum results, default 10."`
-}
-
-type memoryOut struct {
-	ID        uuid.UUID `json:"id"`
-	Content   string    `json:"content"`
-	Tags      []string  `json:"tags"`
-	Source    string    `json:"source"`
-	CreatedAt time.Time `json:"created_at"`
-	Score     float64   `json:"score"`
 }
 
 type rememberIn struct {

@@ -9,12 +9,6 @@ select id, content, tags, source, metadata, embedding_model, created_at, updated
 from memories
 where id = $1;
 
--- name: UpdateMemoryContent :exec
--- Clears the embedding so it is recomputed for the new text.
-update memories
-set content = $2, embedding = null, embedding_model = null
-where id = $1;
-
 -- name: SetMemoryEmbedding :execrows
 -- Only writes if the content is still what was embedded; returns 0 rows otherwise.
 update memories
@@ -22,17 +16,15 @@ set embedding = sqlc.arg(embedding), embedding_model = sqlc.arg(embedding_model)
 where id = sqlc.arg(id) and content = sqlc.arg(content);
 
 -- name: ListMemoriesMissingEmbedding :many
-select id, content
+select id
 from memories
 where embedding is null or embedding_model is distinct from sqlc.arg(model)::text
 limit sqlc.arg(lim);
 
--- name: DeleteMemory :exec
-delete from memories where id = $1;
-
 -- name: SearchMemories :many
 -- Hybrid search: reciprocal rank fusion of vector similarity and full-text rank.
--- With use_semantic false, only the keyword side contributes.
+-- With use_semantic false, only the keyword side contributes. Only vectors
+-- from the query's embedding model are compared.
 -- An empty tags array matches everything; otherwise memories must have all given tags.
 with semantic as (
     select id, row_number() over (order by distance) as rank
@@ -40,6 +32,7 @@ with semantic as (
         select id, embedding <=> sqlc.arg(embedding)::vector as distance
         from memories
         where sqlc.arg(use_semantic)::bool and embedding is not null
+          and embedding_model = sqlc.arg(model)::text
           and (cardinality(sqlc.arg(tags)::text[]) = 0 or tags @> sqlc.arg(tags)::text[])
         order by embedding <=> sqlc.arg(embedding)::vector
         limit sqlc.arg(candidates)::int

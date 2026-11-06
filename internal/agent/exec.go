@@ -8,7 +8,7 @@ import (
 	"github.com/cloudwego/eino/adk"
 	"github.com/cloudwego/eino/schema"
 
-	"github.com/anas-domesticus/personal-agent/internal/tools/kit"
+	"github.com/anas-domesticus/personal-agent/internal/domain"
 )
 
 // Turn is what one agent invocation produced.
@@ -20,11 +20,16 @@ type Turn struct {
 	CompletionTokens int
 }
 
-// Run sends the history to the agent and collects everything it produces.
-// onMessage, if set, is called with each message as it completes.
-func (b *Built) Run(ctx context.Context, history []*schema.Message, onMessage func(*schema.Message)) (Turn, error) {
-	ctx = kit.WithAgent(ctx, b.Name)
-	runner := adk.NewRunner(ctx, adk.RunnerConfig{Agent: b.Agent})
+type built struct {
+	agent adk.Agent
+	info  Info
+}
+
+func (b *built) Info() Info { return b.info }
+
+func (b *built) Run(ctx context.Context, history []*schema.Message, onMessage func(*schema.Message)) (Turn, error) {
+	ctx = domain.WithCaller(ctx, b.info.Name)
+	runner := adk.NewRunner(ctx, adk.RunnerConfig{Agent: b.agent})
 	events := runner.Run(ctx, history)
 
 	var t Turn
@@ -34,14 +39,14 @@ func (b *Built) Run(ctx context.Context, history []*schema.Message, onMessage fu
 			break
 		}
 		if ev.Err != nil {
-			return t, fmt.Errorf("agent %s: %w", b.Name, ev.Err)
+			return t, fmt.Errorf("agent %s: %w", b.info.Name, ev.Err)
 		}
 		if ev.Output == nil || ev.Output.MessageOutput == nil {
 			continue
 		}
 		msg, err := ev.Output.MessageOutput.GetMessage()
 		if err != nil {
-			return t, fmt.Errorf("agent %s: read message: %w", b.Name, err)
+			return t, fmt.Errorf("agent %s: read message: %w", b.info.Name, err)
 		}
 		if msg == nil {
 			continue

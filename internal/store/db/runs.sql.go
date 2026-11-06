@@ -77,10 +77,26 @@ func (q *Queries) CreateRunStep(ctx context.Context, arg CreateRunStepParams) (i
 	return id, err
 }
 
-const finishRun = `-- name: FinishRun :exec
+const failUnfinishedSteps = `-- name: FailUnfinishedSteps :exec
+update run_steps
+set status = 'failed', error = $1::text, finished_at = now()
+where run_id = $2 and status = 'running'
+`
+
+type FailUnfinishedStepsParams struct {
+	Error string    `json:"error"`
+	RunID uuid.UUID `json:"run_id"`
+}
+
+func (q *Queries) FailUnfinishedSteps(ctx context.Context, arg FailUnfinishedStepsParams) error {
+	_, err := q.db.Exec(ctx, failUnfinishedSteps, arg.Error, arg.RunID)
+	return err
+}
+
+const finishRun = `-- name: FinishRun :execrows
 update runs
 set status = $2, output = $3, error = $4, finished_at = now()
-where id = $1
+where id = $1 and status in ('queued', 'running')
 `
 
 type FinishRunParams struct {
@@ -90,14 +106,18 @@ type FinishRunParams struct {
 	Error  *string         `json:"error"`
 }
 
-func (q *Queries) FinishRun(ctx context.Context, arg FinishRunParams) error {
-	_, err := q.db.Exec(ctx, finishRun,
+// Only an unfinished run can finish.
+func (q *Queries) FinishRun(ctx context.Context, arg FinishRunParams) (int64, error) {
+	result, err := q.db.Exec(ctx, finishRun,
 		arg.ID,
 		arg.Status,
 		arg.Output,
 		arg.Error,
 	)
-	return err
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const finishRunStep = `-- name: FinishRunStep :exec

@@ -24,10 +24,16 @@ limit sqlc.arg(lim)::int;
 update runs set status = 'running', started_at = now()
 where id = $1 and status = 'queued';
 
--- name: FinishRun :exec
+-- name: FinishRun :execrows
+-- Only an unfinished run can finish.
 update runs
 set status = $2, output = $3, error = $4, finished_at = now()
-where id = $1;
+where id = $1 and status in ('queued', 'running');
+
+-- name: FailUnfinishedSteps :exec
+update run_steps
+set status = 'failed', error = sqlc.arg(error)::text, finished_at = now()
+where run_id = sqlc.arg(run_id) and status = 'running';
 
 -- name: CreateRunStep :one
 insert into run_steps (run_id, node_id, agent_id, agent_version, input)

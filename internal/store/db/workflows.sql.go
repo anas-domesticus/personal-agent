@@ -78,57 +78,6 @@ func (q *Queries) CreateWorkflowVersion(ctx context.Context, arg CreateWorkflowV
 	return i, err
 }
 
-const getCurrentWorkflowVersion = `-- name: GetCurrentWorkflowVersion :one
-select v.workflow_id, v.version, v.graph, v.notes, v.created_at
-from workflows w
-join workflow_versions v on v.workflow_id = w.id and v.version = w.current_version
-where w.name = $1
-`
-
-func (q *Queries) GetCurrentWorkflowVersion(ctx context.Context, name string) (WorkflowVersion, error) {
-	row := q.db.QueryRow(ctx, getCurrentWorkflowVersion, name)
-	var i WorkflowVersion
-	err := row.Scan(
-		&i.WorkflowID,
-		&i.Version,
-		&i.Graph,
-		&i.Notes,
-		&i.CreatedAt,
-	)
-	return i, err
-}
-
-const getWorkflow = `-- name: GetWorkflow :one
-select id, name, description, current_version, embedding_model, created_at, updated_at
-from workflows
-where id = $1
-`
-
-type GetWorkflowRow struct {
-	ID             uuid.UUID `json:"id"`
-	Name           string    `json:"name"`
-	Description    string    `json:"description"`
-	CurrentVersion *int32    `json:"current_version"`
-	EmbeddingModel *string   `json:"embedding_model"`
-	CreatedAt      time.Time `json:"created_at"`
-	UpdatedAt      time.Time `json:"updated_at"`
-}
-
-func (q *Queries) GetWorkflow(ctx context.Context, id uuid.UUID) (GetWorkflowRow, error) {
-	row := q.db.QueryRow(ctx, getWorkflow, id)
-	var i GetWorkflowRow
-	err := row.Scan(
-		&i.ID,
-		&i.Name,
-		&i.Description,
-		&i.CurrentVersion,
-		&i.EmbeddingModel,
-		&i.CreatedAt,
-		&i.UpdatedAt,
-	)
-	return i, err
-}
-
 const getWorkflowByName = `-- name: GetWorkflowByName :one
 select id, name, description, current_version, embedding_model, created_at, updated_at
 from workflows
@@ -148,6 +97,39 @@ type GetWorkflowByNameRow struct {
 func (q *Queries) GetWorkflowByName(ctx context.Context, name string) (GetWorkflowByNameRow, error) {
 	row := q.db.QueryRow(ctx, getWorkflowByName, name)
 	var i GetWorkflowByNameRow
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.Description,
+		&i.CurrentVersion,
+		&i.EmbeddingModel,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const getWorkflowByNameForUpdate = `-- name: GetWorkflowByNameForUpdate :one
+select id, name, description, current_version, embedding_model, created_at, updated_at
+from workflows
+where name = $1
+for update
+`
+
+type GetWorkflowByNameForUpdateRow struct {
+	ID             uuid.UUID `json:"id"`
+	Name           string    `json:"name"`
+	Description    string    `json:"description"`
+	CurrentVersion *int32    `json:"current_version"`
+	EmbeddingModel *string   `json:"embedding_model"`
+	CreatedAt      time.Time `json:"created_at"`
+	UpdatedAt      time.Time `json:"updated_at"`
+}
+
+// Locks the workflow so concurrent version writes are serialised.
+func (q *Queries) GetWorkflowByNameForUpdate(ctx context.Context, name string) (GetWorkflowByNameForUpdateRow, error) {
+	row := q.db.QueryRow(ctx, getWorkflowByNameForUpdate, name)
+	var i GetWorkflowByNameForUpdateRow
 	err := row.Scan(
 		&i.ID,
 		&i.Name,
@@ -274,7 +256,7 @@ func (q *Queries) ListWorkflows(ctx context.Context) ([]ListWorkflowsRow, error)
 }
 
 const listWorkflowsMissingEmbedding = `-- name: ListWorkflowsMissingEmbedding :many
-select id, name, description
+select id
 from workflows
 where embedding is null or embedding_model is distinct from $1::text
 limit $2
@@ -285,25 +267,19 @@ type ListWorkflowsMissingEmbeddingParams struct {
 	Lim   int32  `json:"lim"`
 }
 
-type ListWorkflowsMissingEmbeddingRow struct {
-	ID          uuid.UUID `json:"id"`
-	Name        string    `json:"name"`
-	Description string    `json:"description"`
-}
-
-func (q *Queries) ListWorkflowsMissingEmbedding(ctx context.Context, arg ListWorkflowsMissingEmbeddingParams) ([]ListWorkflowsMissingEmbeddingRow, error) {
+func (q *Queries) ListWorkflowsMissingEmbedding(ctx context.Context, arg ListWorkflowsMissingEmbeddingParams) ([]uuid.UUID, error) {
 	rows, err := q.db.Query(ctx, listWorkflowsMissingEmbedding, arg.Model, arg.Lim)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	items := []ListWorkflowsMissingEmbeddingRow{}
+	items := []uuid.UUID{}
 	for rows.Next() {
-		var i ListWorkflowsMissingEmbeddingRow
-		if err := rows.Scan(&i.ID, &i.Name, &i.Description); err != nil {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
 			return nil, err
 		}
-		items = append(items, i)
+		items = append(items, id)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
@@ -318,15 +294,16 @@ with semantic as (
         select id, embedding <=> $2::vector as distance
         from workflows
         where $3::bool and embedding is not null
+          and embedding_model = $4::text
         order by embedding <=> $2::vector
-        limit $4::int
+        limit $5::int
     ) s
 ),
 keyword as (
     select id, row_number() over (order by ts_rank_cd(search, q) desc) as rank
-    from workflows, websearch_to_tsquery('english', $5::text) q
+    from workflows, websearch_to_tsquery('english', $6::text) q
     where search @@ q
-    limit $4::int
+    limit $5::int
 )
 select w.id, w.name, w.description, w.current_version,
        (coalesce(1.0 / (60 + s.rank), 0) + coalesce(1.0 / (60 + k.rank), 0))::float8 as score
@@ -341,6 +318,7 @@ type SearchWorkflowsParams struct {
 	Lim         int32           `json:"lim"`
 	Embedding   pgvector.Vector `json:"embedding"`
 	UseSemantic bool            `json:"use_semantic"`
+	Model       string          `json:"model"`
 	Candidates  int32           `json:"candidates"`
 	Query       string          `json:"query"`
 }
@@ -354,12 +332,14 @@ type SearchWorkflowsRow struct {
 }
 
 // Hybrid search: reciprocal rank fusion of vector similarity and full-text rank.
-// With use_semantic false, only the keyword side contributes.
+// With use_semantic false, only the keyword side contributes. Only vectors
+// from the query's embedding model are compared.
 func (q *Queries) SearchWorkflows(ctx context.Context, arg SearchWorkflowsParams) ([]SearchWorkflowsRow, error) {
 	rows, err := q.db.Query(ctx, searchWorkflows,
 		arg.Lim,
 		arg.Embedding,
 		arg.UseSemantic,
+		arg.Model,
 		arg.Candidates,
 		arg.Query,
 	)

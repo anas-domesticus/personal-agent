@@ -8,15 +8,17 @@ select id, name, description, current_version, embedding_model, created_at, upda
 from workflows
 where name = $1;
 
+-- name: GetWorkflowByNameForUpdate :one
+-- Locks the workflow so concurrent version writes are serialised.
+select id, name, description, current_version, embedding_model, created_at, updated_at
+from workflows
+where name = $1
+for update;
+
 -- name: ListWorkflows :many
 select id, name, description, current_version, embedding_model, created_at, updated_at
 from workflows
 order by name;
-
--- name: GetWorkflow :one
-select id, name, description, current_version, embedding_model, created_at, updated_at
-from workflows
-where id = $1;
 
 -- name: UpdateWorkflowDescription :exec
 -- Clears the embedding so it is recomputed for the new text.
@@ -34,7 +36,7 @@ set embedding = sqlc.arg(embedding), embedding_model = sqlc.arg(embedding_model)
 where id = sqlc.arg(id) and name = sqlc.arg(name) and description = sqlc.arg(description);
 
 -- name: ListWorkflowsMissingEmbedding :many
-select id, name, description
+select id
 from workflows
 where embedding is null or embedding_model is distinct from sqlc.arg(model)::text
 limit sqlc.arg(lim);
@@ -53,24 +55,20 @@ update workflows set current_version = $2 where id = $1;
 -- name: GetWorkflowVersion :one
 select * from workflow_versions where workflow_id = $1 and version = $2;
 
--- name: GetCurrentWorkflowVersion :one
-select v.*
-from workflows w
-join workflow_versions v on v.workflow_id = w.id and v.version = w.current_version
-where w.name = $1;
-
 -- name: ListWorkflowVersions :many
 select * from workflow_versions where workflow_id = $1 order by version desc;
 
 -- name: SearchWorkflows :many
 -- Hybrid search: reciprocal rank fusion of vector similarity and full-text rank.
--- With use_semantic false, only the keyword side contributes.
+-- With use_semantic false, only the keyword side contributes. Only vectors
+-- from the query's embedding model are compared.
 with semantic as (
     select id, row_number() over (order by distance) as rank
     from (
         select id, embedding <=> sqlc.arg(embedding)::vector as distance
         from workflows
         where sqlc.arg(use_semantic)::bool and embedding is not null
+          and embedding_model = sqlc.arg(model)::text
         order by embedding <=> sqlc.arg(embedding)::vector
         limit sqlc.arg(candidates)::int
     ) s
