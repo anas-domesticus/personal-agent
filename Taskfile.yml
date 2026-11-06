@@ -1,0 +1,60 @@
+version: "3"
+
+dotenv: [".env"]
+
+tasks:
+  up:
+    desc: Start Postgres and Mosquitto
+    cmds:
+      - docker compose up -d --wait
+
+  down:
+    desc: Stop services (data is kept)
+    cmds:
+      - docker compose down
+
+  db:reset:
+    desc: Delete all local data and restart services
+    prompt: This deletes the local database. Continue?
+    cmds:
+      - docker compose down -v
+      - docker compose up -d --wait
+
+  db:psql:
+    desc: Open psql on the local database
+    cmds:
+      - docker compose exec postgres psql -U agent -d agent
+
+  migration:new:
+    desc: "Create a new migration, e.g. task migration:new -- add_runs"
+    cmds:
+      - goose -dir internal/store/migrations create {{.CLI_ARGS}} sql
+
+  sqlc:
+    desc: Regenerate query code from SQL
+    sources: ["internal/store/queries/*.sql", "internal/store/migrations/*.sql", "sqlc.yaml"]
+    cmds:
+      - sqlc generate
+
+  build:
+    desc: Build agentd
+    deps: [sqlc]
+    cmds:
+      - go build -o bin/agentd ./cmd/agentd
+
+  run:
+    desc: Run agentd (migrates on start)
+    deps: [sqlc]
+    cmds:
+      - go run ./cmd/agentd
+
+  test:
+    desc: Run tests (needs Docker for testcontainers)
+    deps: [sqlc]
+    cmds:
+      - go test ./... {{.CLI_ARGS}}
+
+  lint:
+    desc: Run go vet
+    cmds:
+      - go vet ./...
