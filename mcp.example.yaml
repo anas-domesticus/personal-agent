@@ -1,0 +1,23 @@
+# MCP servers the agent connects to at startup. Copy to mcp.yaml (or point
+# MCP_CONFIG at another path). ${VAR} references are filled from the
+# environment (.env), so keep secrets there, not here.
+#
+# Tools are exposed to agents as "<server>__<tool>"; list "mcp:<server>" on
+# an agent version to give it every tool from that server. A server that
+# fails to connect is skipped with a warning.
+
+servers:
+  # Streamable HTTP, e.g. Composio.
+  composio:
+    transport: http
+    url: ${COMPOSIO_MCP_URL}
+    headers:
+      x-api-key: ${COMPOSIO_API_KEY}
+    # tools: [GMAIL_FETCH_EMAILS]   # optional allowlist; default is every tool
+
+  # A local server run as a subprocess.
+  filesystem:
+    transport: stdio
+    command: npx
+    args: ["-y", "@modelcontextprotocol/server-filesystem", "${HOME}/Documents"]
+    disabled: true

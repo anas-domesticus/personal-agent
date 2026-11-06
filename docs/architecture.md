@@ -32,9 +32,17 @@ memories
 ## Agents and tools
 
 - `internal/catalog` is the write and read path. It validates input, wraps writes in transactions and queues embed jobs in the same transaction.
-- `internal/tools` is the registry; each set of tools is a submodule: `clock`, `memory`, `admin` (agents, workflows, runs), with shared helpers in `kit`. **General tools** (`current_time`, `search_memories`, `remember`) are opted into by listing their names on an agent version. **Admin tools** cannot be listed by name; they are injected only when the agent has the admin flag. Tool errors are returned to the model as `{"ok": false, "error": ...}` so it can correct itself.
+- `internal/tools` is the registry; each set of tools is a submodule: `clock`, `memory`, `mcp`, `admin` (agents, workflows, runs), with shared helpers in `kit`. **General tools** (`current_time`, `search_memories`, `remember`) are opted into by listing their names on an agent version. **Admin tools** cannot be listed by name; they are injected only when the agent has the admin flag. Tool errors are returned to the model as `{"ok": false, "error": ...}` so it can correct itself.
 - `internal/agent` builds an Eino `ChatModelAgent` from an agent's current version: its OpenRouter model, its tools, plus the admin tools if flagged.
 - The **admin agent** (`admin`) is the one the TUI will talk to. It is seeded on first start with the prompt in `internal/agent/admin_prompt.md` and the model from `ADMIN_MODEL` (default `deepseek/deepseek-v4.1-flash`). Later versions, including ones it writes itself, are left alone.
+
+## Configuration
+
+`internal/config` loads everything: settings from the environment (`.env` via `task`) and MCP servers from `mcp.yaml` (or `MCP_CONFIG`). See `mcp.example.yaml`. `${VAR}` references in the MCP file are filled from the environment, so secrets stay out of it.
+
+## MCP
+
+`internal/tools/mcp` connects to each enabled server at startup (streamable HTTP, SSE or stdio) using Eino's MCP adapter. Tools are named `<server>__<tool>`; an agent version lists them by name, or `mcp:<server>` for all of a server's tools. A server that fails to connect, or references an unset variable, is skipped with a warning, and agents that list its tools still build without them. MCP tool errors are returned to the model as `{"ok": false, "error": ...}` rather than ending the run. Servers are config-only: no tool can add one.
 
 ## Conversations
 

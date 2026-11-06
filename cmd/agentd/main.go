@@ -24,6 +24,7 @@ import (
 	"github.com/anas-domesticus/personal-agent/internal/runner"
 	"github.com/anas-domesticus/personal-agent/internal/store"
 	"github.com/anas-domesticus/personal-agent/internal/tools"
+	"github.com/anas-domesticus/personal-agent/internal/tools/mcp"
 )
 
 func main() {
@@ -75,7 +76,11 @@ func run() error {
 	}
 
 	cat := catalog.New(catalog.Options{Store: st, Jobs: jobs, Embedder: embedder})
-	registry, err := tools.New(tools.Deps{Catalog: cat})
+
+	mcpServers := mcp.Connect(ctx, cfg.MCP)
+	defer mcpServers.Close()
+
+	registry, err := tools.New(tools.Deps{Catalog: cat, MCP: mcpServers})
 	if err != nil {
 		return err
 	}
