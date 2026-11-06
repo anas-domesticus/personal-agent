@@ -44,8 +44,41 @@ cmd/agentd ──> app (composition root; the TUI will use it too)
                                      store (pool, migrations, sqlc), embed (jobs)
 ```
 
+### Package map
+
+| Package | Responsibility |
+|---|---|
+| `cmd/agentd` | Entrypoint: config, signals, graceful shutdown |
+| `internal/app` | Composition root: builds every service in dependency order |
+| `internal/config` | Environment settings and the MCP YAML |
+| `internal/domain` | Shared types (`Agent`, `Run`, `Conversation`, `AgentConfig`, ...) and sentinel errors |
+| `internal/store` | Connection pool, embedded goose migrations, `InTx` |
+| `internal/store/db` | sqlc-generated queries (never hand-edited) |
+| `internal/catalog` | Agents, workflows and memories: validation, versioning, search |
+| `internal/agent` | Builds runnable Eino agents from versions; the subagent tool; history windowing |
+| `internal/chat` | Conversations and turns (`Service`, `PGStore`) |
+| `internal/runs` | Workflow runs: service, River worker, reaper |
+| `internal/workflow` | Graph validation, topological order, output schemas |
+| `internal/embed` | Embedding jobs and sweeps |
+| `internal/llm` | OpenRouter chat models, embedder, model catalogue |
+| `internal/search` | `Searcher` seam and its OpenRouter implementation |
+| `internal/workspace` | `Workspace` seam for files and commands: `Local`, `Sandbox` (unimplemented) |
+| `internal/tools` | Tool registry, config checks and the `Toolset` agents are built from |
+| `internal/tools/kit` | Tool contract (`Spec`), settings decoding, output capping |
+| `internal/tools/admin` | Admin tools: agents, workflows, runs, `list_tools` |
+| `internal/tools/clock` | `current_time` |
+| `internal/tools/memory` | `search_memories`, `remember` |
+| `internal/tools/files` | `read`, `write`, `edit`, `glob`, `grep`, `shell` over a `Workspace` |
+| `internal/tools/web` | `web_search`, `web_fetch` |
+| `internal/tools/mcp` | MCP server connections and their tools |
+| `internal/mocks` | Generated mocks of third-party (Eino) interfaces |
+| `internal/testdb` | Throwaway pgvector Postgres via testcontainers |
+| `internal/testenv` | The whole stack on `testdb`, with scripted models, for integration tests |
+
+### Seams
+
 - **`domain`** holds the types every layer shares (`Agent`, `AgentVersion`, `Workflow`, `Run`, `Step`, `Memory`, `Conversation`, `AgentConfig`) and the errors `ErrNotFound`, `ErrExists`, `ErrBusy`, `ErrConflict`. Services return these, never sqlc rows, so tools and UIs don't depend on query shapes.
-- **Interfaces live with their consumer.** The admin tools depend on small `Agents`, `Workflows` and `Runs` interfaces. The memory tools depend on `memory.Store`. `agent.Builder` depends on `Source` and `Toolset`. `runs.Worker` depends on `Recorder` and `Agents`. `chat.Service` depends on `chat.Store` and `Agents`. The catalog checks tools through `ToolPolicy` and queues jobs through `JobInserter`. Built agents are an `agent.Runnable`, so the run worker and chat can be tested without Eino or Postgres (see `runs/worker_test.go`).
+- **Interfaces live with their consumer** (see [conventions](conventions/go.md#design)). The admin tools depend on small `Agents`, `Workflows` and `Runs` interfaces. The tool registry reaches MCP through `tools.MCPSource`. The memory tools depend on `memory.Store`. `agent.Builder` depends on `Source` and `Toolset`. `runs.Worker` depends on `Recorder` and `Agents`. `chat.Service` depends on `chat.Store` and `Agents`. The catalog checks tools through `ToolPolicy` and queues jobs through `JobInserter`. Built agents are an `agent.Runnable`, so the run worker and chat can be tested without Eino or Postgres (see `runs/worker_test.go`).
 - **No late binding.** `app.New` builds in dependency order: store, an insert-only River client, MCP; then memories and the general tool registry; then agents (which validate tools against the registry), workflows and runs; then the admin tools and the full toolset; and last the builder, chat and the River client that works jobs.
 - Each aggregate has one owner that writes it: the catalog for agents, workflows and memories, `runs` for runs and steps, `chat` for conversations, and `embed` for embedding columns.
 
@@ -155,11 +188,12 @@ A trigger rejects any update to `agent_versions` and `workflow_versions`. Deleti
 
 ## Development
 
-Requires Go, Docker and `task`.
+Requires Go, Docker and [Task](https://taskfile.dev). See [AGENTS.md](../AGENTS.md) for the full command list and rules, and [docs/conventions](conventions/) for code and test conventions.
 
 ```
 cp .env.example .env    # add OPENROUTER_API_KEY
+task tools              # pinned golangci-lint, sqlc, goose
 task up                 # Postgres
 task run                # migrates, then runs agentd
-task test               # integration tests use testcontainers
+task check              # generated code, docs, lint and tests (Docker for testcontainers)
 ```
