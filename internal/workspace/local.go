@@ -32,14 +32,14 @@ func NewLocal(root string) (*Local, error) {
 	}
 	abs, err := filepath.Abs(root)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("workspace root: %w", err)
 	}
 	if err := os.MkdirAll(abs, 0o755); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("create workspace root: %w", err)
 	}
 	real, err := filepath.EvalSymlinks(abs)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("resolve workspace root: %w", err)
 	}
 	return &Local{root: real}, nil
 }
@@ -114,12 +114,16 @@ func (l *Local) Read(_ context.Context, path string) ([]byte, error) {
 	}
 	fi, err := os.Stat(p)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("read: %w", err)
 	}
 	if fi.IsDir() {
 		return nil, fmt.Errorf("%s is a directory", path)
 	}
-	return os.ReadFile(p)
+	data, err := os.ReadFile(p)
+	if err != nil {
+		return nil, fmt.Errorf("read: %w", err)
+	}
+	return data, nil
 }
 
 func (l *Local) Write(_ context.Context, path string, data []byte) error {
@@ -128,9 +132,12 @@ func (l *Local) Write(_ context.Context, path string, data []byte) error {
 		return err
 	}
 	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
-		return err
+		return fmt.Errorf("write: %w", err)
 	}
-	return os.WriteFile(p, data, 0o644)
+	if err := os.WriteFile(p, data, 0o644); err != nil {
+		return fmt.Errorf("write: %w", err)
+	}
+	return nil
 }
 
 func (l *Local) Stat(_ context.Context, path string) (Entry, error) {
@@ -140,7 +147,7 @@ func (l *Local) Stat(_ context.Context, path string) (Entry, error) {
 	}
 	fi, err := os.Stat(p)
 	if err != nil {
-		return Entry{}, err
+		return Entry{}, fmt.Errorf("stat: %w", err)
 	}
 	return l.entry(p, fi), nil
 }
@@ -152,7 +159,7 @@ func (l *Local) List(_ context.Context, path string) ([]Entry, error) {
 	}
 	des, err := os.ReadDir(p) // sorted by name
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("list: %w", err)
 	}
 	out := make([]Entry, 0, len(des))
 	for _, de := range des {
@@ -197,10 +204,12 @@ func (l *Local) Glob(ctx context.Context, req GlobRequest) ([]string, error) {
 	var hits []hit
 	err = filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
+			// The walk's own root must be readable; below it, an unreadable
+			// entry is skipped so one bad directory doesn't hide the rest.
 			if p == dir {
 				return err
 			}
-			return nil // unreadable entry; keep going
+			return nil
 		}
 		if ctx.Err() != nil {
 			return ctx.Err()
@@ -222,15 +231,13 @@ func (l *Local) Glob(ctx context.Context, req GlobRequest) ([]string, error) {
 		if ok, _ := doublestar.Match(pattern, subject); !ok {
 			return nil
 		}
-		fi, err := d.Info()
-		if err != nil {
-			return nil
+		if mod, ok := modTime(d); ok {
+			hits = append(hits, hit{l.rel(p), mod})
 		}
-		hits = append(hits, hit{l.rel(p), fi.ModTime()})
 		return nil
 	})
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("glob: %w", err)
 	}
 	slices.SortStableFunc(hits, func(a, b hit) int {
 		if c := b.mod.Compare(a.mod); c != 0 {
@@ -243,6 +250,17 @@ func (l *Local) Glob(ctx context.Context, req GlobRequest) ([]string, error) {
 		out = append(out, h.path)
 	}
 	return out, nil
+}
+
+// modTime returns an entry's modification time. ok is false if the entry
+// can no longer be described, such as when it was removed during a walk;
+// callers skip such entries.
+func modTime(d fs.DirEntry) (time.Time, bool) {
+	fi, err := d.Info()
+	if err != nil {
+		return time.Time{}, false
+	}
+	return fi.ModTime(), true
 }
 
 func (l *Local) Grep(ctx context.Context, req GrepRequest) ([]GrepMatch, error) {
@@ -270,17 +288,15 @@ func (l *Local) Grep(ctx context.Context, req GrepRequest) ([]GrepMatch, error) 
 	}
 	fi, err := os.Stat(root)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("grep: %w", err)
 	}
 	max := limit(req.Limit)
 	var out []GrepMatch
 	errFull := errors.New("full")
 
-	search := func(p string) error {
-		data, err := readText(p)
-		if err != nil || data == nil {
-			return nil
-		}
+	// search scans one file's text; data is nil for a binary or oversized
+	// file, which is skipped.
+	search := func(p string, data []byte) error {
 		line := 0
 		for len(data) > 0 {
 			line++
@@ -303,13 +319,19 @@ func (l *Local) Grep(ctx context.Context, req GrepRequest) ([]GrepMatch, error) 
 	}
 
 	if !fi.IsDir() {
-		if err := search(root); err != nil && err != errFull {
+		// A file named explicitly must be readable.
+		data, err := readText(root)
+		if err != nil {
+			return nil, fmt.Errorf("grep: %w", err)
+		}
+		if err := search(root, data); err != nil && !errors.Is(err, errFull) {
 			return nil, err
 		}
 		return out, nil
 	}
 	err = filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
+			// As in Glob: only the root must be readable.
 			if p == root {
 				return err
 			}
@@ -337,10 +359,16 @@ func (l *Local) Grep(ctx context.Context, req GrepRequest) ([]GrepMatch, error) 
 				return nil
 			}
 		}
-		return search(p)
+		data, err := readText(p)
+		if err != nil {
+			// Skipped like an unreadable directory entry: it may have been
+			// removed or be unreadable, and the rest of the tree still counts.
+			return nil //nolint:nilerr // deliberately skips unreadable files
+		}
+		return search(p, data)
 	})
-	if err != nil && err != errFull {
-		return nil, err
+	if err != nil && !errors.Is(err, errFull) {
+		return nil, fmt.Errorf("grep: %w", err)
 	}
 	return out, nil
 }
@@ -349,14 +377,14 @@ func (l *Local) Grep(ctx context.Context, req GrepRequest) ([]GrepMatch, error) 
 func readText(p string) ([]byte, error) {
 	fi, err := os.Stat(p)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("stat: %w", err)
 	}
 	if !fi.Mode().IsRegular() || fi.Size() > MaxGrepFileSize {
 		return nil, nil
 	}
 	data, err := os.ReadFile(p)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("read: %w", err)
 	}
 	if bytes.IndexByte(data[:min(len(data), 8192)], 0) >= 0 {
 		return nil, nil
@@ -388,7 +416,7 @@ func (l *Local) Exec(ctx context.Context, req ExecRequest) (ExecResult, error) {
 		return ExecResult{}, err
 	}
 	if fi, err := os.Stat(dir); err != nil {
-		return ExecResult{}, err
+		return ExecResult{}, fmt.Errorf("exec: %w", err)
 	} else if !fi.IsDir() {
 		return ExecResult{}, fmt.Errorf("%s is not a directory", req.Dir)
 	}
@@ -429,7 +457,7 @@ func (l *Local) Exec(ctx context.Context, req ExecRequest) (ExecResult, error) {
 		res.ExitCode = cmd.ProcessState.ExitCode()
 	}
 	if ctx.Err() != nil {
-		return ExecResult{}, ctx.Err()
+		return ExecResult{}, fmt.Errorf("exec: %w", ctx.Err())
 	}
 	if errors.Is(runCtx.Err(), context.DeadlineExceeded) {
 		res.TimedOut = true
@@ -437,7 +465,7 @@ func (l *Local) Exec(ctx context.Context, req ExecRequest) (ExecResult, error) {
 	}
 	var exitErr *exec.ExitError
 	if err != nil && !errors.As(err, &exitErr) && !errors.Is(err, exec.ErrWaitDelay) && !res.TimedOut {
-		return ExecResult{}, err
+		return ExecResult{}, fmt.Errorf("run command: %w", err)
 	}
 	res.Output, res.Truncated = out.String()
 	return res, nil

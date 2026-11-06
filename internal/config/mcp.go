@@ -87,7 +87,7 @@ func ParseMCP(raw []byte, lookup func(string) (string, bool)) (MCP, error) {
 	dec := yaml.NewDecoder(strings.NewReader(string(raw)))
 	dec.KnownFields(true)
 	if err := dec.Decode(&m); err != nil && !errors.Is(err, io.EOF) { // EOF: empty file
-		return MCP{}, err
+		return MCP{}, fmt.Errorf("decode mcp config: %w", err)
 	}
 
 	var errs []error

@@ -68,7 +68,7 @@ func (a *Agents) validate(in domain.AgentVersionInput, checkTools bool) (validat
 	}
 	raw, err := json.Marshal(cfg)
 	if err != nil {
-		return validated{}, err
+		return validated{}, fmt.Errorf("encode config: %w", err)
 	}
 	return validated{AgentVersionInput: in, config: raw}, nil
 }

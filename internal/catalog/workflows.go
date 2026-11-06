@@ -106,7 +106,11 @@ func (w *Workflows) checkGraph(ctx context.Context, g workflow.Graph) ([]byte, e
 	if len(missing) > 0 {
 		return nil, fmt.Errorf("unknown agents: %s", strings.Join(missing, ", "))
 	}
-	return json.Marshal(g)
+	raw, err := json.Marshal(g)
+	if err != nil {
+		return nil, fmt.Errorf("encode graph: %w", err)
+	}
+	return raw, nil
 }
 
 // SetVersion makes an existing version current (for rollback or promotion).

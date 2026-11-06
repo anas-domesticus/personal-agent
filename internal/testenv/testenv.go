@@ -56,9 +56,11 @@ type Options struct {
 // New starts the stack with job workers running and scripted fake models.
 // The admin agent is seeded with adminModel.
 func New(t *testing.T, adminModel string) *Env {
+	t.Helper()
 	return NewWith(t, adminModel, Options{})
 }
 
+// NewWith is New with parts of the stack replaced.
 func NewWith(t *testing.T, adminModel string, o Options) *Env {
 	t.Helper()
 	ctx := context.Background()
@@ -99,6 +101,19 @@ func NewWith(t *testing.T, adminModel string, o Options) *Env {
 	return e
 }
 
+// The doubles below are hand-written rather than mockery mocks because they
+// stand in for collaborators across the whole stack, called any number of
+// times and in any order by agents, runs and jobs; a mock would need every
+// call listed up front.
+var (
+	_ model.ToolCallingChatModel = (*fakeModel)(nil)
+	_ embedding.Embedder         = FakeEmbedder{}
+	_ search.Searcher            = FakeSearch{}
+	_ agent.ModelCatalog         = AnyModel{}
+)
+
+// fakeModel plays back the Responder scripted for its slug; it isn't a mock
+// because a conversation's replies depend on the messages so far.
 type fakeModel struct {
 	env  *Env
 	slug string
@@ -130,7 +145,9 @@ func (f *fakeModel) WithTools([]*schema.ToolInfo) (model.ToolCallingChatModel, e
 // FakeEmbeddingModel is the embedding model name the fake embedder reports.
 const FakeEmbeddingModel = "fake-embedding"
 
-// FakeEmbedder returns the same 1536-dimension vector for every text.
+// FakeEmbedder returns the same 1536-dimension vector for every text. It
+// isn't a mock because background embed jobs call it an unknown number of
+// times.
 type FakeEmbedder struct{}
 
 func (FakeEmbedder) EmbedStrings(_ context.Context, texts []string, _ ...embedding.Option) ([][]float64, error) {
@@ -143,7 +160,8 @@ func (FakeEmbedder) EmbedStrings(_ context.Context, texts []string, _ ...embeddi
 	return out, nil
 }
 
-// FakeSearch returns one result naming the query.
+// FakeSearch returns one result naming the query. It isn't a mock because
+// one stateless double serves every integration test.
 type FakeSearch struct{}
 
 func (FakeSearch) Search(_ context.Context, q search.Query) (search.Response, error) {
@@ -153,7 +171,8 @@ func (FakeSearch) Search(_ context.Context, q search.Query) (search.Response, er
 	}, nil
 }
 
-// AnyModel accepts every model.
+// AnyModel accepts every model. It isn't a mock because it's a stateless
+// stand-in shared by every integration test.
 type AnyModel struct{}
 
 func (AnyModel) Check(context.Context, string) error { return nil }

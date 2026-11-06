@@ -45,9 +45,7 @@ func Open(ctx context.Context, url string) (*Store, error) {
 	if err != nil {
 		return nil, fmt.Errorf("parse database url: %w", err)
 	}
-	cfg.AfterConnect = func(ctx context.Context, conn *pgx.Conn) error {
-		return pgxvec.RegisterTypes(ctx, conn)
-	}
+	cfg.AfterConnect = pgxvec.RegisterTypes
 
 	pool, err := pgxpool.NewWithConfig(ctx, cfg)
 	if err != nil {
@@ -66,11 +64,22 @@ func Open(ctx context.Context, url string) (*Store, error) {
 }
 
 // InTx runs fn in a transaction, with queries bound to it. The transaction
-// is also passed so jobs can be queued atomically with the writes.
+// is also passed so jobs can be queued atomically with the writes. An error
+// from fn is returned as it is, so callers can still match its sentinels;
+// begin and commit failures are wrapped.
 func (s *Store) InTx(ctx context.Context, fn func(q *db.Queries, tx pgx.Tx) error) error {
-	return pgx.BeginFunc(ctx, s.Pool, func(tx pgx.Tx) error {
-		return fn(s.WithTx(tx), tx)
+	var fnErr error
+	err := pgx.BeginFunc(ctx, s.Pool, func(tx pgx.Tx) error {
+		fnErr = fn(s.WithTx(tx), tx)
+		return fnErr
 	})
+	if fnErr != nil {
+		return fnErr
+	}
+	if err != nil {
+		return fmt.Errorf("transaction: %w", err)
+	}
+	return nil
 }
 
 // Close releases the connection pool.
@@ -87,7 +96,7 @@ func Migrate(ctx context.Context, url string) error {
 
 	migrations, err := fs.Sub(migrationsFS, "migrations")
 	if err != nil {
-		return err
+		return fmt.Errorf("migrations directory: %w", err)
 	}
 
 	locker, err := lock.NewPostgresSessionLocker()

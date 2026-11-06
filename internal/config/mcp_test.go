@@ -1,12 +1,15 @@
-package config
+package config_test
 
 import (
 	"os"
 	"path/filepath"
-	"slices"
-	"strings"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"github.com/anas-domesticus/personal-agent/internal/config"
 )
 
 func lookup(env map[string]string) func(string) (string, bool) {
@@ -14,7 +17,19 @@ func lookup(env map[string]string) func(string) (string, bool) {
 }
 
 func TestParseMCP(t *testing.T) {
-	raw := []byte(`
+	t.Parallel()
+
+	tests := []struct {
+		name        string
+		raw         string
+		env         map[string]string
+		want        map[string]config.MCPServer
+		wantEnabled []string
+		wantErr     string // substring; empty means no error
+	}{
+		{
+			name: "expands variables and applies defaults",
+			raw: `
 servers:
   composio:
     transport: http
@@ -26,79 +41,96 @@ servers:
     transport: stdio
     command: npx
     args: ["-y", "server-filesystem", "${HOME_DIR}"]
+    env:
+      ROOT: ${HOME_DIR}
     disabled: true
   broken:
     transport: sse
     url: https://x/${NOT_SET}
     timeout: 5s
-`)
-	m, err := ParseMCP(raw, lookup(map[string]string{"ACCOUNT": "me", "COMPOSIO_API_KEY": "secret", "HOME_DIR": "/home"}))
-	if err != nil {
-		t.Fatal(err)
+`,
+			env: map[string]string{"ACCOUNT": "me", "COMPOSIO_API_KEY": "secret", "HOME_DIR": "/home"},
+			want: map[string]config.MCPServer{
+				"composio": {
+					Name: "composio", Transport: config.TransportHTTP, URL: "https://mcp.example.com/me",
+					Headers: map[string]string{"x-api-key": "secret"}, Tools: []string{"GMAIL_FETCH_EMAILS"},
+					Timeout: 30 * time.Second,
+				},
+				"files": {
+					Name: "files", Transport: config.TransportStdio, Command: "npx",
+					Args: []string{"-y", "server-filesystem", "/home"}, Env: map[string]string{"ROOT": "/home"},
+					Disabled: true, Timeout: 30 * time.Second,
+				},
+				"broken": {
+					Name: "broken", Transport: config.TransportSSE, URL: "https://x/",
+					Timeout: 5 * time.Second, Missing: []string{"NOT_SET"},
+				},
+			},
+			wantEnabled: []string{"broken", "composio"},
+		},
+		{name: "empty", raw: "", want: nil},
+		{name: "not yaml", raw: "servers: [", wantErr: "decode mcp config"},
+		{name: "unknown field", raw: "servers:\n  a:\n    transport: http\n    url: x\n    bogus: 1\n", wantErr: "bogus"},
+		{name: "bad transport", raw: "servers:\n  a:\n    transport: carrier-pigeon\n", wantErr: "transport must be http, sse or stdio"},
+		{name: "http needs url", raw: "servers:\n  a:\n    transport: http\n", wantErr: "url is required"},
+		{name: "http with command", raw: "servers:\n  a:\n    transport: http\n    url: x\n    command: y\n", wantErr: "only for stdio"},
+		{name: "stdio needs command", raw: "servers:\n  a:\n    transport: stdio\n", wantErr: "command is required"},
+		{name: "bad name", raw: "servers:\n  Bad Name:\n    transport: http\n    url: x\n", wantErr: "name must match"},
+		{name: "stdio with url", raw: "servers:\n  a:\n    transport: stdio\n    command: x\n    url: y\n", wantErr: "not used by stdio"},
 	}
-
-	c := m.Servers["composio"]
-	if c.URL != "https://mcp.example.com/me" || c.Headers["x-api-key"] != "secret" || len(c.Missing) != 0 {
-		t.Fatalf("composio = %+v", c)
-	}
-	if c.Timeout != 30*time.Second {
-		t.Fatalf("default timeout = %v", c.Timeout)
-	}
-	if f := m.Servers["files"]; f.Args[2] != "/home" || !f.Disabled {
-		t.Fatalf("files = %+v", f)
-	}
-	if b := m.Servers["broken"]; !slices.Equal(b.Missing, []string{"NOT_SET"}) || b.Timeout != 5*time.Second {
-		t.Fatalf("broken = %+v", b)
-	}
-
-	var names []string
-	for _, s := range m.Enabled() {
-		names = append(names, s.Name)
-	}
-	if !slices.Equal(names, []string{"broken", "composio"}) {
-		t.Fatalf("enabled = %v", names)
-	}
-}
-
-func TestParseMCPRejects(t *testing.T) {
-	tests := map[string]string{
-		"unknown field":   "servers:\n  a:\n    transport: http\n    url: x\n    bogus: 1\n",
-		"bad transport":   "servers:\n  a:\n    transport: carrier-pigeon\n",
-		"http needs url":  "servers:\n  a:\n    transport: http\n",
-		"stdio needs cmd": "servers:\n  a:\n    transport: stdio\n",
-		"bad name":        "servers:\n  Bad Name:\n    transport: http\n    url: x\n",
-		"stdio with url":  "servers:\n  a:\n    transport: stdio\n    command: x\n    url: y\n",
-	}
-	for name, raw := range tests {
-		t.Run(name, func(t *testing.T) {
-			if _, err := ParseMCP([]byte(raw), lookup(nil)); err == nil {
-				t.Fatal("expected an error")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			m, err := config.ParseMCP([]byte(tt.raw), lookup(tt.env))
+			if tt.wantErr != "" {
+				require.ErrorContains(t, err, tt.wantErr)
+				return
 			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, m.Servers)
+			var enabled []string
+			for _, s := range m.Enabled() {
+				enabled = append(enabled, s.Name)
+			}
+			assert.Equal(t, tt.wantEnabled, enabled)
 		})
 	}
 }
 
 func TestLoadMCP(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "empty.yaml"), nil, 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "bad.yaml"), []byte("servers:\n  a:\n    transport: nope\n"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "good.yaml"), []byte("servers:\n  a:\n    transport: http\n    url: x\n"), 0o600))
+	require.NoError(t, os.Mkdir(filepath.Join(dir, "dir.yaml"), 0o755))
 
-	m, err := LoadMCP(filepath.Join(dir, "missing.yaml"))
-	if err != nil || len(m.Servers) != 0 {
-		t.Fatalf("missing file: %+v, %v", m, err)
+	tests := []struct {
+		name        string
+		file        string
+		wantServers []string
+		wantErr     string // substring; empty means no error
+	}{
+		{name: "missing file means no servers", file: "missing.yaml"},
+		{name: "empty file", file: "empty.yaml"},
+		{name: "valid file", file: "good.yaml", wantServers: []string{"a"}},
+		{name: "invalid file names the file", file: "bad.yaml", wantErr: "bad.yaml"},
+		{name: "unreadable file", file: "dir.yaml", wantErr: "read "},
 	}
-
-	empty := filepath.Join(dir, "empty.yaml")
-	if err := os.WriteFile(empty, nil, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := LoadMCP(empty); err != nil {
-		t.Fatalf("empty file: %v", err)
-	}
-
-	bad := filepath.Join(dir, "bad.yaml")
-	if err := os.WriteFile(bad, []byte("servers:\n  a:\n    transport: nope\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := LoadMCP(bad); err == nil || !strings.Contains(err.Error(), "bad.yaml") {
-		t.Fatalf("bad file error should name the file: %v", err)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			m, err := config.LoadMCP(filepath.Join(dir, tt.file))
+			if tt.wantErr != "" {
+				require.ErrorContains(t, err, tt.wantErr)
+				return
+			}
+			require.NoError(t, err)
+			var names []string
+			for _, s := range m.Enabled() {
+				names = append(names, s.Name)
+			}
+			assert.Equal(t, tt.wantServers, names)
+		})
 	}
 }

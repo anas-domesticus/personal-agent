@@ -23,7 +23,7 @@ func CompileSchema(raw []byte) (*jsonschema.Schema, error) {
 	}
 	c := jsonschema.NewCompiler()
 	if err := c.AddResource("output.json", doc); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("add output schema: %w", err)
 	}
 	s, err := c.Compile("output.json")
 	if err != nil {
@@ -38,7 +38,11 @@ func CompileSchema(raw []byte) (*jsonschema.Schema, error) {
 // are tolerated.
 func ParseOutput(reply string, schema []byte) (json.RawMessage, error) {
 	if len(schema) == 0 {
-		return json.Marshal(map[string]string{"text": reply})
+		raw, err := json.Marshal(map[string]string{"text": reply})
+		if err != nil {
+			return nil, fmt.Errorf("encode reply: %w", err)
+		}
+		return raw, nil
 	}
 	s, err := CompileSchema(schema)
 	if err != nil {
@@ -61,7 +65,7 @@ func ParseOutput(reply string, schema []byte) (json.RawMessage, error) {
 
 	var compact bytes.Buffer
 	if err := json.Compact(&compact, []byte(raw)); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("compact reply: %w", err)
 	}
 	return compact.Bytes(), nil
 }
