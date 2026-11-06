@@ -3,12 +3,13 @@ package agent_test
 import (
 	"context"
 	"encoding/json"
-	"slices"
 	"strings"
 	"testing"
 
 	"github.com/cloudwego/eino/schema"
 	"github.com/google/uuid"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/anas-domesticus/personal-agent/internal/agent"
 	"github.com/anas-domesticus/personal-agent/internal/chat"
@@ -20,6 +21,8 @@ func toolCall(name, args string) *schema.Message {
 	return schema.AssistantMessage("", []schema.ToolCall{{ID: "c1", Type: "function", Function: schema.FunctionCall{Name: name, Arguments: args}}})
 }
 
+// TestSubagent is an ordered scenario over one conversation: later subtests
+// continue the subagent the first one started, so they run in sequence.
 func TestSubagent(t *testing.T) {
 	e := setup(t)
 	ctx := context.Background()
@@ -42,122 +45,109 @@ func TestSubagent(t *testing.T) {
 			"subagent": {"models": ["fake/worker", "fake/parent"]}}}`),
 	}))
 	conv, err := e.Chat.Start(ctx, "parent")
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 
 	send := func(t *testing.T, args string) map[string]any {
 		t.Helper()
 		delegate = args
 		turn, err := e.Chat.Send(ctx, conv.ID, "go", nil)
-		if err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, err)
 		var res map[string]any
-		if err := json.Unmarshal([]byte(strings.TrimPrefix(turn.Final, "result: ")), &res); err != nil {
-			t.Fatalf("final = %q", turn.Final)
-		}
+		require.NoError(t, json.Unmarshal([]byte(strings.TrimPrefix(turn.Final, "result: ")), &res), "final = %q", turn.Final)
 		return res
+	}
+	data := func(t *testing.T, res map[string]any) map[string]any {
+		t.Helper()
+		require.Equal(t, true, res["ok"], "result = %v", res)
+		d, isMap := res["data"].(map[string]any)
+		require.True(t, isMap, "result = %v", res)
+		return d
 	}
 
 	var childID string
 	t.Run("ad-hoc worker", func(t *testing.T) {
-		res := send(t, `{"description": "check time", "prompt": "what time is it", "model": "fake/worker", "tools": ["current_time"]}`)
-		data, _ := res["data"].(map[string]any)
-		if res["ok"] != true || data["output"] != "worker did: what time is it" {
-			t.Fatalf("result = %v", res)
-		}
-		childID = data["conversation_id"].(string)
+		d := data(t, send(t, `{"description": "check time", "prompt": "what time is it", "model": "fake/worker", "tools": ["current_time"]}`))
+		assert.Equal(t, "worker did: what time is it", d["output"])
+		var isString bool
+		childID, isString = d["conversation_id"].(string)
+		require.True(t, isString, "data = %v", d)
 
 		child, err := e.Chat.Get(ctx, mustUUID(t, childID))
-		if err != nil {
-			t.Fatal(err)
-		}
-		if child.ParentID == nil || *child.ParentID != conv.ID || child.Title != "check time" {
-			t.Fatalf("child = %+v", child)
-		}
-		if s := child.Subagent; s == nil || s.Model != "fake/worker" || len(s.Tools) != 1 || s.Tools["current_time"] == nil {
-			t.Fatalf("spec = %+v", child.Subagent)
-		}
-		h, _ := e.Chat.History(ctx, child.ID)
-		if len(h) != 2 {
-			t.Fatalf("child history = %d messages", len(h))
-		}
+		require.NoError(t, err)
+		require.NotNil(t, child.ParentID)
+		assert.Equal(t, conv.ID, *child.ParentID)
+		assert.Equal(t, "check time", child.Title)
+		require.NotNil(t, child.Subagent)
+		assert.Equal(t, "fake/worker", child.Subagent.Model)
+		require.Len(t, child.Subagent.Tools, 1)
+		assert.NotNil(t, child.Subagent.Tools["current_time"])
+
+		h, err := e.Chat.History(ctx, child.ID)
+		require.NoError(t, err)
+		assert.Len(t, h, 2, "child history")
+
 		// Subagent conversations aren't top-level.
-		list, _ := e.Chat.List(ctx, 50)
+		list, err := e.Chat.List(ctx, 50)
+		require.NoError(t, err)
 		for _, c := range list {
-			if c.ID == child.ID {
-				t.Fatal("subagent conversation listed as top-level")
-			}
+			assert.NotEqual(t, child.ID, c.ID, "subagent conversation listed as top-level")
 		}
 	})
 
 	t.Run("continue a subagent", func(t *testing.T) {
-		res := send(t, `{"description": "follow up", "prompt": "and again", "conversation_id": "`+childID+`"}`)
-		if res["ok"] != true {
-			t.Fatalf("result = %v", res)
-		}
-		if h, _ := e.Chat.History(ctx, mustUUID(t, childID)); len(h) != 4 {
-			t.Fatalf("child history = %d messages, want 4", len(h))
-		}
+		data(t, send(t, `{"description": "follow up", "prompt": "and again", "conversation_id": "`+childID+`"}`))
+		h, err := e.Chat.History(ctx, mustUUID(t, childID))
+		require.NoError(t, err)
+		assert.Len(t, h, 4, "child history")
 	})
 
 	t.Run("requests are checked", func(t *testing.T) {
-		for args, want := range map[string]string{
-			`{"description": "x", "prompt": "x", "model": "other/model"}`:                       "isn't allowed",
-			`{"description": "x", "prompt": "x", "model": "fake/worker", "tools": ["shell"]}`:   "only have tools you have",
-			`{"description": "x", "prompt": "x"}`:                                               "give agent, model",
-			`{"description": "x", "prompt": "x", "agent": "parent", "tools": ["current_time"]}`: "only applies to ad-hoc",
-		} {
-			res := send(t, args)
-			if res["ok"] != false || !strings.Contains(res["error"].(string), want) {
-				t.Errorf("%s: got %v, want error containing %q", args, res, want)
-			}
+		tests := []struct {
+			name    string
+			args    string
+			wantErr string
+		}{
+			{name: "model not allowed", args: `{"description": "x", "prompt": "x", "model": "other/model"}`, wantErr: "isn't allowed"},
+			{name: "tool the caller lacks", args: `{"description": "x", "prompt": "x", "model": "fake/worker", "tools": ["shell"]}`, wantErr: "only have tools you have"},
+			{name: "neither agent nor model", args: `{"description": "x", "prompt": "x"}`, wantErr: "give agent, model"},
+			{name: "tools for a stored agent", args: `{"description": "x", "prompt": "x", "agent": "parent", "tools": ["current_time"]}`, wantErr: "only applies to ad-hoc"},
+		}
+		// Not parallel: each case drives the same conversation.
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				assert.Contains(t, toolError(t, send(t, tt.args)), tt.wantErr)
+			})
 		}
 	})
 
 	t.Run("depth is limited", func(t *testing.T) {
 		// A subagent of an agent with the default max_depth can't delegate.
 		r, err := e.Builder.BuildSpec(ctx, domain.SubagentSpec{Agent: "parent"}, 1)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if slices.Contains(r.Info().Tools, agent.SubagentToolName) {
-			t.Fatalf("depth-1 subagent got the subagent tool: %v", r.Info().Tools)
-		}
+		require.NoError(t, err)
+		assert.NotContains(t, r.Info().Tools, agent.SubagentToolName, "depth-1 subagent got the subagent tool")
+
 		top, err := e.Builder.Build(ctx, "parent")
-		if err != nil {
-			t.Fatal(err)
-		}
-		if !slices.Contains(top.Info().Tools, agent.SubagentToolName) {
-			t.Fatalf("top-level agent is missing the subagent tool: %v", top.Info().Tools)
-		}
+		require.NoError(t, err)
+		assert.Contains(t, top.Info().Tools, agent.SubagentToolName, "top-level agent is missing the subagent tool")
+
 		// Subagents never get admin tools.
 		admin, err := e.Builder.BuildSpec(ctx, domain.SubagentSpec{Agent: agent.AdminName}, 1)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if slices.Contains(admin.Info().Tools, "create_agent") {
-			t.Fatal("admin agent run as a subagent kept its admin tools")
-		}
+		require.NoError(t, err)
+		assert.NotContains(t, admin.Info().Tools, "create_agent", "admin agent run as a subagent kept its admin tools")
 	})
 
 	t.Run("stored agent on another model", func(t *testing.T) {
 		ok(t)(e.Agents.Create(ctx, "helper", "x", domain.AgentVersionInput{SystemPrompt: "x", Model: "fake/parent"}))
-		res := send(t, `{"description": "ask helper", "prompt": "hello", "agent": "helper", "model": "fake/worker"}`)
-		data, _ := res["data"].(map[string]any)
-		if res["ok"] != true || data["output"] != "worker did: hello" {
-			t.Fatalf("result = %v", res)
-		}
+		d := data(t, send(t, `{"description": "ask helper", "prompt": "hello", "agent": "helper", "model": "fake/worker"}`))
+		assert.Equal(t, "worker did: hello", d["output"])
 	})
 }
 
 func TestSubagentConversationsSurviveListing(t *testing.T) {
+	t.Parallel()
 	// Window and Settled are shared by chat and subagents.
 	msgs := []*schema.Message{schema.UserMessage("a"), toolCall("x", "{}")}
-	if got := agent.Settled(msgs); len(got) != 1 {
-		t.Fatalf("settled = %d", len(got))
-	}
+	assert.Len(t, agent.Settled(msgs), 1)
 	var _ chat.Store = chat.NewPGStore(nil)
 	var _ agent.SubagentStore = chat.NewPGStore(nil)
 }
@@ -165,8 +155,6 @@ func TestSubagentConversationsSurviveListing(t *testing.T) {
 func mustUUID(t *testing.T, s string) uuid.UUID {
 	t.Helper()
 	id, err := uuid.Parse(s)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	return id
 }

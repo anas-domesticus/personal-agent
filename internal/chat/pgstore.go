@@ -5,11 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/cloudwego/eino/schema"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
-	"time"
 
 	"github.com/anas-domesticus/personal-agent/internal/domain"
 	"github.com/anas-domesticus/personal-agent/internal/store"
@@ -58,7 +58,7 @@ func (p *PGStore) CreateSubagent(ctx context.Context, parent *uuid.UUID, spec do
 	}
 	raw, err := json.Marshal(spec)
 	if err != nil {
-		return domain.Conversation{}, err
+		return domain.Conversation{}, fmt.Errorf("encode subagent spec: %w", err)
 	}
 	c, err := p.st.CreateConversation(ctx, db.CreateConversationParams{AgentID: agentID, Title: title, ParentID: parent, Subagent: raw})
 	if err != nil {
@@ -140,7 +140,7 @@ func (p *PGStore) AppendTurn(ctx context.Context, id uuid.UUID, lastID int64, ms
 		for _, m := range msgs {
 			raw, err := json.Marshal(m)
 			if err != nil {
-				return err
+				return fmt.Errorf("encode message: %w", err)
 			}
 			var version *int32
 			if m.Role != schema.User && agentVersion > 0 {

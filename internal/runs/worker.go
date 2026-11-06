@@ -104,7 +104,7 @@ func (w *Worker) execute(ctx context.Context, run domain.Run, g workflow.Graph) 
 		}
 		rawInput, err := json.Marshal(input)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("encode input of node %s: %w", nid, err)
 		}
 		out, err := w.runNode(ctx, run.ID, nodes[nid], rawInput)
 		if err != nil {
@@ -119,7 +119,11 @@ func (w *Worker) execute(ctx context.Context, run domain.Run, g workflow.Graph) 
 			final[nid] = outputs[nid]
 		}
 	}
-	return json.Marshal(final)
+	out, err := json.Marshal(final)
+	if err != nil {
+		return nil, fmt.Errorf("encode run output: %w", err)
+	}
+	return out, nil
 }
 
 // runNode runs one node and records it as a step.

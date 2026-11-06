@@ -3,12 +3,12 @@ package agent_test
 import (
 	"context"
 	"encoding/json"
-	"errors"
-	"strings"
 	"sync"
 	"testing"
 
 	"github.com/cloudwego/eino/components/tool"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/anas-domesticus/personal-agent/internal/agent"
 	"github.com/anas-domesticus/personal-agent/internal/domain"
@@ -18,11 +18,10 @@ import (
 
 // ok fails the test if a (value, error) call returned an error.
 func ok(t *testing.T) func(any, error) {
+	t.Helper()
 	return func(_ any, err error) {
 		t.Helper()
-		if err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, err)
 	}
 }
 
@@ -36,67 +35,58 @@ func call(t *testing.T, ts []tool.BaseTool, name, args string) map[string]any {
 	t.Helper()
 	ctx := context.Background()
 	for _, bt := range ts {
-		info, _ := bt.Info(ctx)
+		info, err := bt.Info(ctx)
+		require.NoError(t, err)
 		if info.Name != name {
 			continue
 		}
 		out, err := bt.(tool.InvokableTool).InvokableRun(ctx, args)
-		if err != nil {
-			t.Fatalf("%s: %v", name, err)
-		}
+		require.NoError(t, err, name)
 		var res map[string]any
-		if err := json.Unmarshal([]byte(out), &res); err != nil {
-			t.Fatalf("%s: bad output %q", name, out)
-		}
+		require.NoError(t, json.Unmarshal([]byte(out), &res), "%s: bad output %q", name, out)
 		return res
 	}
-	t.Fatalf("tool %q not available", name)
+	require.Failf(t, "tool not available", "tool %q", name)
 	return nil
 }
 
-func toolNames(names []string) map[string]bool {
-	out := map[string]bool{}
-	for _, n := range names {
-		out[n] = true
-	}
-	return out
+// toolError returns a failed tool result's error message.
+func toolError(t *testing.T, res map[string]any) string {
+	t.Helper()
+	require.Equal(t, false, res["ok"], "expected the tool to fail: %v", res)
+	msg, isString := res["error"].(string)
+	require.True(t, isString, "error is not a string: %v", res)
+	return msg
 }
 
 // toolsOf returns the tool instances an agent's current version gets.
 func toolsOf(t *testing.T, e *testenv.Env, name string) []tool.BaseTool {
 	t.Helper()
 	d, err := e.Agents.Get(context.Background(), name)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	return e.Tools.For(d.Current.Config.Tools, d.Admin)
 }
 
+// TestAdminAgent is an ordered scenario over one stack: each subtest builds
+// on the agents and workflows the earlier ones created, so they run in
+// sequence.
 func TestAdminAgent(t *testing.T) {
 	e := setup(t)
 	ctx := context.Background()
 
 	admin, err := e.Builder.Build(ctx, agent.AdminName)
-	if err != nil {
-		t.Fatal(err)
-	}
-	names := toolNames(admin.Info().Tools)
+	require.NoError(t, err)
 	adminTools := toolsOf(t, e, agent.AdminName)
-	for _, want := range []string{"create_agent", "create_workflow", "list_tools", "remember", "current_time",
-		"web_search", "web_fetch", "subagent", "read", "write", "edit", "glob", "grep", "shell"} {
-		if !names[want] {
-			t.Errorf("admin agent is missing tool %q", want)
-		}
-	}
+	assert.Subset(t, admin.Info().Tools, []string{"create_agent", "create_workflow", "list_tools", "remember", "current_time",
+		"web_search", "web_fetch", "subagent", "read", "write", "edit", "glob", "grep", "shell"})
 
 	t.Run("EnsureAdmin is idempotent", func(t *testing.T) {
-		if err := agent.EnsureAdmin(ctx, e.Agents, "openai/gpt-5"); err != nil {
-			t.Fatal(err)
-		}
-		d, _ := e.Agents.Get(ctx, agent.AdminName)
-		if *d.CurrentVersion != 1 || d.Current.Model != "deepseek/deepseek-v4.1-flash" {
-			t.Fatalf("admin was overwritten: v%d %s", *d.CurrentVersion, d.Current.Model)
-		}
+		require.NoError(t, agent.EnsureAdmin(ctx, e.Agents, "openai/gpt-5"))
+		d, err := e.Agents.Get(ctx, agent.AdminName)
+		require.NoError(t, err)
+		require.NotNil(t, d.CurrentVersion)
+		assert.Equal(t, int32(1), *d.CurrentVersion, "admin was overwritten")
+		assert.Equal(t, "deepseek/deepseek-v4.1-flash", d.Current.Model, "admin was overwritten")
 	})
 
 	t.Run("create agent with structured output", func(t *testing.T) {
@@ -106,19 +96,11 @@ func TestAdminAgent(t *testing.T) {
 			"config": {"tools": {"search_memories": true}},
 			"output_schema": {"type": "object", "properties": {"ranked": {"type": "array"}}}
 		}`)
-		if res["ok"] != true {
-			t.Fatalf("create_agent failed: %v", res)
-		}
+		require.Equal(t, true, res["ok"], "create_agent failed: %v", res)
 		d, err := e.Agents.Get(ctx, "triager")
-		if err != nil {
-			t.Fatal(err)
-		}
-		if d.Admin {
-			t.Fatal("new agents must not be admins")
-		}
-		if !strings.Contains(string(d.Current.OutputSchema), "ranked") {
-			t.Fatalf("output schema not stored: %s", d.Current.OutputSchema)
-		}
+		require.NoError(t, err)
+		assert.False(t, d.Admin, "new agents must not be admins")
+		assert.Contains(t, string(d.Current.OutputSchema), "ranked", "output schema not stored")
 	})
 
 	t.Run("admin tools cannot be assigned by name", func(t *testing.T) {
@@ -126,27 +108,34 @@ func TestAdminAgent(t *testing.T) {
 			"name": "sneaky", "description": "x", "system_prompt": "x",
 			"model": "openai/gpt-5-mini", "config": {"tools": {"create_agent": true}}
 		}`)
-		if res["ok"] != false || !strings.Contains(res["error"].(string), "admin flag") {
-			t.Fatalf("expected rejection, got %v", res)
-		}
+		assert.Contains(t, toolError(t, res), "admin flag")
 	})
 
 	t.Run("workflow graph is validated", func(t *testing.T) {
-		res := call(t, adminTools, "create_workflow", `{
-			"name": "loop", "description": "x",
-			"graph": {"nodes": [{"id": "a", "agent": "triager"}, {"id": "b", "agent": "triager"}],
-			          "edges": [{"from": "a", "to": "b"}, {"from": "b", "to": "a"}]}
-		}`)
-		if res["ok"] != false || !strings.Contains(res["error"].(string), "cycle") {
-			t.Fatalf("expected cycle error, got %v", res)
+		tests := []struct {
+			name    string
+			args    string
+			wantErr string
+		}{
+			{
+				name: "cycle",
+				args: `{"name": "loop", "description": "x",
+					"graph": {"nodes": [{"id": "a", "agent": "triager"}, {"id": "b", "agent": "triager"}],
+					          "edges": [{"from": "a", "to": "b"}, {"from": "b", "to": "a"}]}}`,
+				wantErr: "cycle",
+			},
+			{
+				name: "unknown agent",
+				args: `{"name": "ghost", "description": "x",
+					"graph": {"nodes": [{"id": "a", "agent": "nobody"}], "edges": []}}`,
+				wantErr: "unknown agents: nobody",
+			},
 		}
-
-		res = call(t, adminTools, "create_workflow", `{
-			"name": "ghost", "description": "x",
-			"graph": {"nodes": [{"id": "a", "agent": "nobody"}], "edges": []}
-		}`)
-		if res["ok"] != false || !strings.Contains(res["error"].(string), "unknown agents: nobody") {
-			t.Fatalf("expected unknown agent error, got %v", res)
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				res := call(t, adminTools, "create_workflow", tt.args)
+				assert.Contains(t, toolError(t, res), tt.wantErr)
+			})
 		}
 	})
 
@@ -156,23 +145,20 @@ func TestAdminAgent(t *testing.T) {
 			"graph": {"nodes": [{"id": "rank", "agent": "triager", "instruction": "Rank today's email."}], "edges": []},
 			"notes": "first cut"
 		}`)
-		if res["ok"] != true {
-			t.Fatalf("create_workflow failed: %v", res)
-		}
+		require.Equal(t, true, res["ok"], "create_workflow failed: %v", res)
 		var n int
-		if err := e.Store.Pool.QueryRow(ctx, `select count(*) from river_job where kind = 'embed' and args->>'target' = 'workflow'`).Scan(&n); err != nil {
-			t.Fatal(err)
-		}
-		if n != 1 {
-			t.Fatalf("embed jobs = %d, want 1", n)
-		}
+		require.NoError(t, e.Store.Pool.QueryRow(ctx,
+			`select count(*) from river_job where kind = 'embed' and args->>'target' = 'workflow'`).Scan(&n))
+		assert.Equal(t, 1, n, "embed jobs")
 
 		got := call(t, adminTools, "get_workflow", `{"name": "inbox-triage"}`)
-		data := got["data"].(map[string]any)
-		graph := data["current"].(map[string]any)["graph"].(map[string]any)
-		if len(graph["nodes"].([]any)) != 1 {
-			t.Fatalf("graph = %v", graph)
-		}
+		data, isMap := got["data"].(map[string]any)
+		require.True(t, isMap, "get_workflow = %v", got)
+		current, isMap := data["current"].(map[string]any)
+		require.True(t, isMap, "get_workflow = %v", got)
+		graph, isMap := current["graph"].(map[string]any)
+		require.True(t, isMap, "get_workflow = %v", got)
+		assert.Len(t, graph["nodes"], 1)
 	})
 
 	t.Run("versions and rollback", func(t *testing.T) {
@@ -180,64 +166,55 @@ func TestAdminAgent(t *testing.T) {
 			"name": "triager", "system_prompt": "Rank the emails, most urgent first.",
 			"model": "openai/gpt-5-mini", "activate": true, "notes": "clearer ordering"
 		}`)
-		if res["ok"] != true {
-			t.Fatalf("add_agent_version failed: %v", res)
-		}
-		if res := call(t, adminTools, "set_agent_version", `{"name": "triager", "version": 1}`); res["ok"] != true {
-			t.Fatalf("rollback failed: %v", res)
-		}
-		if res := call(t, adminTools, "set_agent_version", `{"name": "triager", "version": 9}`); res["ok"] != false {
-			t.Fatalf("expected missing version error, got %v", res)
-		}
-		d, _ := e.Agents.Get(ctx, "triager")
-		if *d.CurrentVersion != 1 {
-			t.Fatalf("current = %d, want 1", *d.CurrentVersion)
-		}
+		require.Equal(t, true, res["ok"], "add_agent_version failed: %v", res)
+		res = call(t, adminTools, "set_agent_version", `{"name": "triager", "version": 1}`)
+		require.Equal(t, true, res["ok"], "rollback failed: %v", res)
+		res = call(t, adminTools, "set_agent_version", `{"name": "triager", "version": 9}`)
+		assert.Equal(t, false, res["ok"], "expected missing version error, got %v", res)
+		d, err := e.Agents.Get(ctx, "triager")
+		require.NoError(t, err)
+		require.NotNil(t, d.CurrentVersion)
+		assert.Equal(t, int32(1), *d.CurrentVersion)
 	})
 
 	t.Run("memory round trip without embeddings", func(t *testing.T) {
-		if res := call(t, adminTools, "remember", `{"content": "The boiler struggles below minus two", "tags": ["home"]}`); res["ok"] != true {
-			t.Fatalf("remember failed: %v", res)
-		}
-		res := call(t, adminTools, "search_memories", `{"query": "boiler"}`)
-		if hits := res["data"].([]any); len(hits) != 1 {
-			t.Fatalf("hits = %v", hits)
-		}
+		res := call(t, adminTools, "remember", `{"content": "The boiler struggles below minus two", "tags": ["home"]}`)
+		require.Equal(t, true, res["ok"], "remember failed: %v", res)
+		res = call(t, adminTools, "search_memories", `{"query": "boiler"}`)
+		assert.Len(t, res["data"], 1)
 	})
 
 	t.Run("non-admin agent gets only its listed tools", func(t *testing.T) {
 		b, err := e.Builder.Build(ctx, "triager")
-		if err != nil {
-			t.Fatal(err)
-		}
-		names := toolNames(b.Info().Tools)
-		if len(names) != 1 || !names["search_memories"] {
-			t.Fatalf("tools = %v", names)
-		}
+		require.NoError(t, err)
+		assert.Equal(t, []string{"search_memories"}, b.Info().Tools)
 	})
 }
 
 // Checks the schema the model sees includes fields from embedded structs.
 func TestToolSchemas(t *testing.T) {
 	e := setup(t)
+	var found bool
 	for _, bt := range toolsOf(t, e, agent.AdminName) {
-		info, _ := bt.Info(context.Background())
+		info, err := bt.Info(context.Background())
+		require.NoError(t, err)
 		if info.Name != "create_agent" {
 			continue
 		}
-		js, err := info.ParamsOneOf.ToJSONSchema()
-		if err != nil {
-			t.Fatal(err)
-		}
-		b, _ := json.Marshal(js)
+		found = true
+		js, err := info.ToJSONSchema()
+		require.NoError(t, err)
+		b, err := json.Marshal(js)
+		require.NoError(t, err)
 		for _, field := range []string{"system_prompt", "model", "output_schema", "name"} {
-			if !strings.Contains(string(b), `"`+field+`"`) {
-				t.Errorf("create_agent schema missing %q: %s", field, b)
-			}
+			assert.Contains(t, string(b), `"`+field+`"`, "create_agent schema missing %q", field)
 		}
 	}
+	assert.True(t, found, "admin agent has no create_agent tool")
 }
 
+// TestAgentVersionRules runs its subtests in order against one database:
+// later ones use the "tuned" agent created earlier and count its versions.
 func TestAgentVersionRules(t *testing.T) {
 	e := setup(t)
 	ctx := context.Background()
@@ -246,40 +223,42 @@ func TestAgentVersionRules(t *testing.T) {
 	}
 
 	t.Run("config is validated", func(t *testing.T) {
-		if _, err := e.Agents.Create(ctx, "typo", "x", v(`{"max_iteration": 5}`)); err == nil || !strings.Contains(err.Error(), "max_iteration") {
-			t.Fatalf("unknown config key should be rejected, got %v", err)
+		tests := []struct {
+			name    string
+			agent   string
+			cfg     string
+			wantErr string
+		}{
+			{name: "unknown key", agent: "typo", cfg: `{"max_iteration": 5}`, wantErr: "max_iteration"},
+			{name: "temperature out of range", agent: "hot", cfg: `{"temperature": 7}`, wantErr: "temperature"},
 		}
-		if _, err := e.Agents.Create(ctx, "hot", "x", v(`{"temperature": 7}`)); err == nil {
-			t.Fatal("out-of-range temperature should be rejected")
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				_, err := e.Agents.Create(ctx, tt.agent, "x", v(tt.cfg))
+				require.ErrorContains(t, err, tt.wantErr)
+			})
 		}
+
 		got, err := e.Agents.Create(ctx, "tuned", "x", v(`{"temperature": 0.2, "max_iterations": 5}`))
-		if err != nil {
-			t.Fatal(err)
-		}
-		if got.Config.MaxIterations != 5 || *got.Config.Temperature != 0.2 {
-			t.Fatalf("config = %+v", got.Config)
-		}
+		require.NoError(t, err)
+		assert.Equal(t, 5, got.Config.MaxIterations)
+		require.NotNil(t, got.Config.Temperature)
+		assert.InDelta(t, 0.2, *got.Config.Temperature, 1e-6)
 	})
 
 	t.Run("names are validated", func(t *testing.T) {
-		if _, err := e.Agents.Create(ctx, "Bad Name", "x", v(`{}`)); err == nil {
-			t.Fatal("invalid name should be rejected")
-		}
-		if _, err := e.Agents.Create(ctx, "tuned", "x", v(`{}`)); !errors.Is(err, domain.ErrExists) {
-			t.Fatalf("duplicate name: got %v, want ErrExists", err)
-		}
+		_, err := e.Agents.Create(ctx, "Bad Name", "x", v(`{}`))
+		require.Error(t, err, "invalid name should be rejected")
+		_, err = e.Agents.Create(ctx, "tuned", "x", v(`{}`))
+		require.ErrorIs(t, err, domain.ErrExists)
 	})
 
 	t.Run("versions are immutable", func(t *testing.T) {
 		_, err := e.Store.Pool.Exec(ctx, `update agent_versions set system_prompt = 'changed'`)
-		if err == nil || !strings.Contains(err.Error(), "immutable") {
-			t.Fatalf("update should be refused, got %v", err)
-		}
+		require.ErrorContains(t, err, "immutable")
 		ok(t)(e.Workflows.Create(ctx, "frozen", "x", workflow.Graph{Nodes: []workflow.Node{{ID: "a", Agent: "tuned"}}}, ""))
 		_, err = e.Store.Pool.Exec(ctx, `update workflow_versions set notes = 'changed'`)
-		if err == nil || !strings.Contains(err.Error(), "immutable") {
-			t.Fatalf("update should be refused, got %v", err)
-		}
+		require.ErrorContains(t, err, "immutable")
 	})
 
 	t.Run("concurrent versions get distinct numbers", func(t *testing.T) {
@@ -294,40 +273,26 @@ func TestAgentVersionRules(t *testing.T) {
 		wg.Wait()
 		close(errs)
 		for err := range errs {
-			if err != nil {
-				t.Fatal(err)
-			}
+			require.NoError(t, err)
 		}
 		vs, err := e.Agents.Versions(ctx, "tuned")
-		if err != nil {
-			t.Fatal(err)
-		}
-		if len(vs) != 9 || vs[0].Version != 9 {
-			t.Fatalf("versions = %d, newest v%d", len(vs), vs[0].Version)
-		}
+		require.NoError(t, err)
+		require.Len(t, vs, 9)
+		assert.Equal(t, int32(9), vs[0].Version)
 	})
 
 	t.Run("a version listing a removed tool still builds", func(t *testing.T) {
 		// Simulate a tool that existed when the version was written but has
 		// since been removed from the code.
 		d, err := e.Agents.Get(ctx, "tuned")
-		if err != nil {
-			t.Fatal(err)
-		}
-		if _, err := e.Store.Pool.Exec(ctx, `
+		require.NoError(t, err)
+		_, err = e.Store.Pool.Exec(ctx, `
 			insert into agent_versions (agent_id, version, system_prompt, model, config)
-			values ($1, 10, 'x', 'openai/gpt-5-mini', '{"tools": {"current_time": true, "retired_tool": true}}')`, d.ID); err != nil {
-			t.Fatal(err)
-		}
-		if err := e.Agents.SetVersion(ctx, "tuned", 10); err != nil {
-			t.Fatal(err)
-		}
+			values ($1, 10, 'x', 'openai/gpt-5-mini', '{"tools": {"current_time": true, "retired_tool": true}}')`, d.ID)
+		require.NoError(t, err)
+		require.NoError(t, e.Agents.SetVersion(ctx, "tuned", 10))
 		b, err := e.Builder.Build(ctx, "tuned")
-		if err != nil {
-			t.Fatalf("build should skip the missing tool: %v", err)
-		}
-		if names := b.Info().Tools; len(names) != 1 || names[0] != "current_time" {
-			t.Fatalf("tools = %v", names)
-		}
+		require.NoError(t, err, "build should skip the missing tool")
+		assert.Equal(t, []string{"current_time"}, b.Info().Tools)
 	})
 }

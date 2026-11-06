@@ -1,3 +1,5 @@
+//go:build live
+
 package chat_test
 
 import (
@@ -8,6 +10,7 @@ import (
 	"github.com/cloudwego/eino/components/model"
 	"github.com/cloudwego/eino/schema"
 	"github.com/google/uuid"
+	"github.com/stretchr/testify/require"
 
 	"github.com/anas-domesticus/personal-agent/internal/agent"
 	"github.com/anas-domesticus/personal-agent/internal/domain"
@@ -35,9 +38,7 @@ func TestLiveAdmin(t *testing.T) {
 	}})
 
 	conv, err := e.Chat.Start(ctx, agent.AdminName)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	id := conv.ID
 	prompt := "Create an agent named greeter (model " + slug + ") that writes a one-sentence greeting for a person. " +
 		`Give it an output schema of {"type":"object","properties":{"greeting":{"type":"string"}},"required":["greeting"]}. ` +
@@ -52,26 +53,16 @@ func TestLiveAdmin(t *testing.T) {
 			t.Logf("tool result: %.300s", m.Content)
 		}
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	t.Logf("final: %s", turn.Final)
 	t.Logf("tokens: prompt=%d completion=%d", turn.PromptTokens, turn.CompletionTokens)
 
 	runsList, err := e.Runs.List(ctx, "greet", 10)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(runsList) == 0 {
-		t.Fatal("admin did not run the workflow")
-	}
+	require.NoError(t, err)
+	require.NotEmpty(t, runsList, "admin did not run the workflow")
 	r, err := e.Runs.Get(ctx, runsList[0].ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if r.Status != domain.RunSucceeded {
-		t.Fatalf("run %s: %v", r.Status, r.Error)
-	}
+	require.NoError(t, err)
+	require.Equal(t, domain.RunSucceeded, r.Status, "run error: %v", r.Error)
 	t.Logf("run output: %s", r.Output)
 }
 
@@ -91,9 +82,7 @@ func TestLiveSubagentSearch(t *testing.T) {
 		Search: search.NewOpenRouter(search.OpenRouterConfig{APIKey: key, Model: slug}),
 	})
 	conv, err := e.Chat.Start(ctx, agent.AdminName)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	turn, err := e.Chat.Send(ctx, conv.ID,
 		"Use the subagent tool with model "+slug+" and only the web_search tool to find the latest stable Go release version. "+
 			"Then tell me the version. Don't ask me anything.",
@@ -102,32 +91,20 @@ func TestLiveSubagentSearch(t *testing.T) {
 				t.Logf("tool call: %s %.300s", tc.Function.Name, tc.Function.Arguments)
 			}
 		})
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	t.Logf("final: %s", turn.Final)
 
 	var child *domain.Conversation
 	var count int
-	if err := e.Store.Pool.QueryRow(ctx, `select count(*) from conversations where parent_id = $1`, conv.ID).Scan(&count); err != nil {
-		t.Fatal(err)
-	}
-	if count == 0 {
-		t.Fatal("admin did not start a subagent")
-	}
+	require.NoError(t, e.Store.Pool.QueryRow(ctx, `select count(*) from conversations where parent_id = $1`, conv.ID).Scan(&count))
+	require.NotZero(t, count, "admin did not start a subagent")
 	var childID uuid.UUID
-	if err := e.Store.Pool.QueryRow(ctx, `select id from conversations where parent_id = $1 limit 1`, conv.ID).Scan(&childID); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, e.Store.Pool.QueryRow(ctx, `select id from conversations where parent_id = $1 limit 1`, conv.ID).Scan(&childID))
 	c, err := e.Chat.Get(ctx, childID)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	child = &c
 	h, err := e.Chat.History(ctx, child.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	searched := false
 	for _, m := range h {
 		for _, tc := range m.ToolCalls {
@@ -137,7 +114,5 @@ func TestLiveSubagentSearch(t *testing.T) {
 			t.Logf("subagent tool result: %.400s", m.Content)
 		}
 	}
-	if !searched {
-		t.Fatalf("subagent (%+v) didn't search the web", child.Subagent)
-	}
+	require.True(t, searched, "subagent (%+v) didn't search the web", child.Subagent)
 }

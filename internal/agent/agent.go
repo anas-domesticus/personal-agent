@@ -174,7 +174,7 @@ var AdminTools = []string{
 func EnsureAdmin(ctx context.Context, s Seeder, model string) error {
 	cfg, err := json.Marshal(domain.AgentConfig{MaxIterations: 30, Tools: domain.On(AdminTools...)})
 	if err != nil {
-		return err
+		return fmt.Errorf("encode admin config: %w", err)
 	}
 	return s.Ensure(ctx, AdminName,
 		"The main agent. Talks to the user and manages the other agents and workflows.",

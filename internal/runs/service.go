@@ -234,10 +234,10 @@ func (s *Service) Reap(ctx context.Context) (int, error) {
 			returning r.id`,
 			(Timeout + staleGrace).Seconds(), Args{}.Kind())
 		if err != nil {
-			return err
+			return fmt.Errorf("fail orphaned runs: %w", err)
 		}
 		if ids, err = pgx.CollectRows(rows, pgx.RowTo[uuid.UUID]); err != nil {
-			return err
+			return fmt.Errorf("read orphaned runs: %w", err)
 		}
 		for _, id := range ids {
 			if err := q.FailUnfinishedSteps(ctx, db.FailUnfinishedStepsParams{RunID: id, Error: "run was interrupted"}); err != nil {

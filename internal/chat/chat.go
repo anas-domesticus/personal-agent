@@ -127,7 +127,7 @@ func (s *Service) Send(ctx context.Context, id uuid.UUID, text string, onMessage
 	msgs := append([]*schema.Message{user}, produced...)
 	if err := s.store.AppendTurn(context.WithoutCancel(ctx), id, lastID, msgs, a.Info().Version, newTitle); err != nil {
 		if runErr != nil {
-			return turn, fmt.Errorf("%w (and saving the partial turn failed: %v)", runErr, err)
+			return turn, fmt.Errorf("%w (and saving the partial turn failed: %w)", runErr, err)
 		}
 		return turn, err
 	}
