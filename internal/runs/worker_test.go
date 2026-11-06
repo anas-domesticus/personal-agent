@@ -78,7 +78,7 @@ var _ agent.Runnable = (*fakeRunnable)(nil)
 
 func (r *fakeRunnable) Info() agent.Info { return r.info }
 
-func (r *fakeRunnable) Run(context.Context, []*schema.Message, func(*schema.Message)) (agent.Turn, error) {
+func (r *fakeRunnable) Run(context.Context, []*schema.Message, agent.Observer) (agent.Turn, error) {
 	r.mu.Lock()
 	reply := r.replies[min(r.calls, len(r.replies)-1)]
 	r.calls++

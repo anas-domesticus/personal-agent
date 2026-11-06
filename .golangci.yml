@@ -45,6 +45,17 @@ linters:
             - {pkg: github.com/anas-domesticus/personal-agent/internal/agent, desc: tools reach services through interfaces they declare}
             - {pkg: github.com/anas-domesticus/personal-agent/internal/embed, desc: tools reach services through interfaces they declare}
             - {pkg: github.com/anas-domesticus/personal-agent/internal/store, desc: tools reach services through interfaces they declare}
+        clients:
+          files: ["**/internal/tui/**", "**/internal/client/**", "!$test"]
+          deny:
+            - {pkg: github.com/anas-domesticus/personal-agent/internal/app, desc: clients talk to the server only through the API (proto/, internal/gen)}
+            - {pkg: github.com/anas-domesticus/personal-agent/internal/server, desc: clients talk to the server only through the API (proto/, internal/gen)}
+            - {pkg: github.com/anas-domesticus/personal-agent/internal/store, desc: clients talk to the server only through the API (proto/, internal/gen)}
+            - {pkg: github.com/anas-domesticus/personal-agent/internal/chat, desc: clients talk to the server only through the API (proto/, internal/gen)}
+            - {pkg: github.com/anas-domesticus/personal-agent/internal/catalog, desc: clients talk to the server only through the API (proto/, internal/gen)}
+            - {pkg: github.com/anas-domesticus/personal-agent/internal/runs, desc: clients talk to the server only through the API (proto/, internal/gen)}
+            - {pkg: github.com/anas-domesticus/personal-agent/internal/agent, desc: clients talk to the server only through the API (proto/, internal/gen)}
+            - {pkg: github.com/anas-domesticus/personal-agent/internal/domain, desc: clients talk to the server only through the API (proto/, internal/gen)}
         leaves:
           files: ["**/internal/domain/**", "**/internal/workflow/**", "**/internal/tools/kit/**", "**/internal/config/**", "**/internal/llm/**", "**/internal/search/**", "**/internal/workspace/**"]
           deny:
@@ -64,12 +75,15 @@ linters:
         - errors\.New\(
         - errors\.Join\(
         - river\.Job(Cancel|Snooze)\(
+        # Builds a new error carrying an API status code; it isn't passing one through.
+        - connect\.NewError\(
   exclusions:
     generated: strict
     presets: [std-error-handling]
     paths:
       - internal/store/db
       - internal/mocks
+      - internal/gen
 
 formatters:
   enable:

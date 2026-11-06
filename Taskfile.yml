@@ -57,10 +57,27 @@ tasks:
   # --- Code generation ----------------------------------------------------
 
   generate:
-    desc: Regenerate all generated code (sqlc queries and mocks)
+    desc: Regenerate all generated code (protobuf API, sqlc queries and mocks)
     cmds:
+      - task: proto
       - task: sqlc
       - task: mocks
+
+  proto:
+    desc: Regenerate the API's Go types and Connect code from proto/ (buf, pinned in tools/go.mod)
+    sources: ["proto/**/*.proto", "buf.yaml", "buf.gen.yaml", "tools/go.mod"]
+    cmds:
+      - go tool -modfile=tools/go.mod buf generate
+
+  proto:lint:
+    desc: Lint proto/ and check it for changes that break existing clients (against main)
+    cmds:
+      - go tool -modfile=tools/go.mod buf lint
+      - go tool -modfile=tools/go.mod buf format --diff --exit-code
+      - |
+        if git cat-file -e main:proto 2>/dev/null; then
+          go tool -modfile=tools/go.mod buf breaking --against '.git#branch=main'
+        fi
 
   sqlc:
     desc: Regenerate query code from SQL
@@ -76,16 +93,51 @@ tasks:
   # --- Build and run ------------------------------------------------------
 
   build:
-    desc: Build agentd
-    deps: [sqlc]
+    desc: Build agent (server and TUI)
+    deps: [sqlc, proto]
     cmds:
-      - go build -o bin/agentd ./cmd/agentd
+      - go build -o bin/agent ./cmd/agent
+
+  install:
+    desc: Install the agent binary on your PATH (GOBIN, else GOPATH/bin)
+    deps: [sqlc, proto]
+    vars:
+      BIN:
+        sh: d=$(go env GOBIN); [ -n "$d" ] || d="$(go env GOPATH)/bin"; echo "$d"
+    cmds:
+      - go install ./cmd/agent
+      - 'echo "Installed {{.BIN}}/agent. It reads its settings from the environment (see .env.example), not from .env; set MCP_CONFIG and WORKSPACE_DIR to absolute paths."'
+
+  uninstall:
+    desc: Remove the binary task install put on your PATH
+    vars:
+      BIN:
+        sh: d=$(go env GOBIN); [ -n "$d" ] || d="$(go env GOPATH)/bin"; echo "$d"
+    cmds:
+      # Only remove an agent binary built from this module.
+      - |
+        if go version -m "{{.BIN}}/agent" 2>/dev/null | grep -q "$(go list -m)"; then
+          rm "{{.BIN}}/agent" && echo "Removed {{.BIN}}/agent"
+        else
+          echo "No agent binary from this repo in {{.BIN}}"
+        fi
 
   run:
-    desc: Run agentd (migrates on start)
-    deps: [sqlc]
+    desc: "Run the server in-process and open the TUI on it (migrates on start). Flags after --, e.g. task run -- -c"
+    deps: [sqlc, proto]
     cmds:
-      - go run ./cmd/agentd
+      - go run ./cmd/agent {{.CLI_ARGS}}
+
+  serve:
+    desc: Run only the server (AGENT_LISTEN, AGENT_TOKEN)
+    deps: [sqlc, proto]
+    cmds:
+      - go run ./cmd/agent serve
+
+  attach:
+    desc: "Open the TUI on a running server, e.g. task attach -- http://host:7433 (AGENT_URL, AGENT_TOKEN)"
+    cmds:
+      - go run ./cmd/agent attach {{.CLI_ARGS}}
 
   # --- Quality ------------------------------------------------------------
 
@@ -95,9 +147,10 @@ tasks:
       - golangci-lint fmt ./...
 
   lint:
-    desc: Run golangci-lint (see .golangci.yml)
+    desc: Run golangci-lint (see .golangci.yml) and buf lint
     cmds:
       - golangci-lint run ./...
+      - task: proto:lint
 
   test:
     desc: Run unit and database tests (needs Docker for testcontainers)
@@ -131,8 +184,9 @@ tasks:
     cmds:
       - task: generate
       - go mod tidy
-      - git diff --exit-code -- go.mod go.sum internal/store/db internal/mocks '**/mocks_test.go'
-      - test -z "$(git status --porcelain -- internal/store/db internal/mocks '**/mocks_test.go')"
+      - cd tools && go mod tidy
+      - git diff --exit-code -- go.mod go.sum tools/go.mod tools/go.sum internal/gen internal/store/db internal/mocks '**/mocks_test.go'
+      - test -z "$(git status --porcelain -- internal/gen internal/store/db internal/mocks '**/mocks_test.go')"
 
   vuln:
     desc: Check dependencies for known vulnerabilities

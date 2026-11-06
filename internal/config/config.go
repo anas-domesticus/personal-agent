@@ -17,6 +17,8 @@ type Config struct {
 	WorkspaceDir     string // root of the local workspace
 	MCPConfigPath    string // where MCP was loaded from
 	MCP              MCP
+	ListenAddr       string // where `agent serve` listens
+	Token            string // the bearer token clients must send; see cmd/agent
 }
 
 const (
@@ -36,6 +38,8 @@ func Load() (Config, error) {
 		Workspace:        getenv("WORKSPACE", WorkspaceLocal),
 		WorkspaceDir:     getenv("WORKSPACE_DIR", "workspace"),
 		MCPConfigPath:    getenv("MCP_CONFIG", "mcp.yaml"),
+		ListenAddr:       getenv("AGENT_LISTEN", "127.0.0.1:7433"),
+		Token:            os.Getenv("AGENT_TOKEN"),
 	}
 	if c.DatabaseURL == "" {
 		return c, fmt.Errorf("DATABASE_URL is required")

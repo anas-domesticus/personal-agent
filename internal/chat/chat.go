@@ -51,11 +51,13 @@ type Service struct {
 	HistoryChars int
 
 	mu     sync.Mutex
-	active map[uuid.UUID]bool
+	active map[uuid.UUID]context.CancelFunc // running turns
+	closed bool
+	turns  sync.WaitGroup
 }
 
 func New(store Store, agents Agents) *Service {
-	return &Service{store: store, agents: agents, HistoryChars: agent.DefaultHistoryChars, active: map[uuid.UUID]bool{}}
+	return &Service{store: store, agents: agents, HistoryChars: agent.DefaultHistoryChars, active: map[uuid.UUID]context.CancelFunc{}}
 }
 
 // Start creates a conversation with the named agent.
@@ -79,12 +81,15 @@ func (s *Service) History(ctx context.Context, id uuid.UUID) ([]*schema.Message,
 }
 
 // Send adds a user message and runs the agent's current version over the
-// conversation. onMessage, if set, sees each new message as it completes.
-// A conversation handles one turn at a time; a second Send while one is in
-// progress returns domain.ErrBusy.
-func (s *Service) Send(ctx context.Context, id uuid.UUID, text string, onMessage func(*schema.Message)) (agent.Turn, error) {
-	if !s.lock(id) {
-		return agent.Turn{}, fmt.Errorf("conversation %s is handling another message: %w", id, domain.ErrBusy)
+// conversation, reporting the turn to obs as it happens. A conversation
+// handles one turn at a time; a second Send while one is in progress returns
+// domain.ErrBusy. Cancel, or cancelling ctx, interrupts the turn; what it
+// saves then follows the same rules as a failed turn.
+func (s *Service) Send(ctx context.Context, id uuid.UUID, text string, obs agent.Observer) (agent.Turn, error) {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	if err := s.lock(id, cancel); err != nil {
+		return agent.Turn{}, err
 	}
 	defer s.unlock(id)
 
@@ -109,7 +114,7 @@ func (s *Service) Send(ctx context.Context, id uuid.UUID, text string, onMessage
 
 	user := schema.UserMessage(text)
 	ctx = domain.WithConversation(ctx, id)
-	turn, runErr := a.Run(ctx, agent.Window(append(history, user), s.HistoryChars), onMessage)
+	turn, runErr := a.Run(ctx, agent.Window(append(history, user), s.HistoryChars), obs)
 	produced := turn.Messages
 	if runErr != nil {
 		produced = agent.Settled(produced)
@@ -143,20 +148,66 @@ func ranTools(msgs []*schema.Message) bool {
 	return false
 }
 
-func (s *Service) lock(id uuid.UUID) bool {
+// Busy reports whether the conversation has a turn running in this process.
+func (s *Service) Busy(id uuid.UUID) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.active[id] {
-		return false
+	_, ok := s.active[id]
+	return ok
+}
+
+// Cancel interrupts the conversation's running turn. It reports whether one
+// was running.
+func (s *Service) Cancel(id uuid.UUID) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	cancel, ok := s.active[id]
+	if ok {
+		cancel()
 	}
-	s.active[id] = true
-	return true
+	return ok
+}
+
+// Close refuses new turns, interrupts running ones and waits until they are
+// saved or ctx ends.
+func (s *Service) Close(ctx context.Context) {
+	s.mu.Lock()
+	s.closed = true
+	for _, cancel := range s.active {
+		cancel()
+	}
+	s.mu.Unlock()
+
+	done := make(chan struct{})
+	go func() {
+		s.turns.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-ctx.Done():
+	}
+}
+
+func (s *Service) lock(id uuid.UUID, cancel context.CancelFunc) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return fmt.Errorf("chat is shutting down: %w", domain.ErrUnavailable)
+	}
+	if _, ok := s.active[id]; ok {
+		return fmt.Errorf("conversation %s is handling another message: %w", id, domain.ErrBusy)
+	}
+	s.active[id] = cancel
+	s.turns.Add(1)
+	return nil
 }
 
 func (s *Service) unlock(id uuid.UUID) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	delete(s.active, id)
+	s.turns.Done()
 }
 
 // title is the first line of the first message, cut to 60 characters.

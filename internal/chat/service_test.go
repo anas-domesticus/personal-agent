@@ -34,13 +34,13 @@ var _ agent.Runnable = (*fakeRunnable)(nil)
 
 func (r *fakeRunnable) Info() agent.Info { return agent.Info{Name: "fake", Version: r.version} }
 
-func (r *fakeRunnable) Run(_ context.Context, history []*schema.Message, onMessage func(*schema.Message)) (agent.Turn, error) {
+func (r *fakeRunnable) Run(_ context.Context, history []*schema.Message, obs agent.Observer) (agent.Turn, error) {
 	r.mu.Lock()
 	r.history = history
 	r.mu.Unlock()
-	if onMessage != nil {
+	if obs.Message != nil {
 		for _, m := range r.turn.Messages {
-			onMessage(m)
+			obs.Message(m)
 		}
 	}
 	return r.turn, r.err
@@ -213,7 +213,7 @@ func TestSend(t *testing.T) {
 			tt.setup(store, agents, tt.agent)
 
 			var streamed int
-			turn, err := chat.New(store, agents).Send(context.Background(), id, tt.text, func(*schema.Message) { streamed++ })
+			turn, err := chat.New(store, agents).Send(context.Background(), id, tt.text, agent.Observer{Message: func(*schema.Message) { streamed++ }})
 			if tt.agent != nil {
 				assert.Equal(t, len(tt.agent.turn.Messages), streamed, "messages streamed")
 				assert.Equal(t, tt.wantHistory, tt.agent.history)
@@ -261,7 +261,7 @@ func TestSendStoreErrors(t *testing.T) {
 			t.Parallel()
 			store := chat.NewMockStore(t)
 			tt.setup(store)
-			_, err := chat.New(store, chat.NewMockAgents(t)).Send(context.Background(), id, "hello", nil)
+			_, err := chat.New(store, chat.NewMockAgents(t)).Send(context.Background(), id, "hello", agent.Observer{})
 			require.ErrorIs(t, err, tt.wantErr)
 		})
 	}
@@ -285,7 +285,7 @@ func TestSendWindowsHistory(t *testing.T) {
 
 	s := chat.New(store, agents)
 	s.HistoryChars = 50
-	_, err := s.Send(context.Background(), id, "now", nil)
+	_, err := s.Send(context.Background(), id, "now", agent.Observer{})
 	require.NoError(t, err)
 	// Older messages stay stored but aren't sent.
 	assert.Equal(t, []*schema.Message{old[2], old[3], schema.UserMessage("now")}, r.history)

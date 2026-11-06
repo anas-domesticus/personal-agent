@@ -16,10 +16,10 @@ You talk to one **admin agent**. It does the work itself, or it builds the speci
 - **Build workflows.** Agents compose into DAG workflows that pass structured JSON between nodes. Workflows run as durable background jobs, and every step is recorded.
 - **Delegate.** It hands self-contained tasks to subagents, either stored agents or ad-hoc workers on any model, to keep its own context focused.
 - **Remember.** It saves facts and preferences, searchable by meaning and keywords.
+- **Chat in the terminal.** A TUI streams the agent's replies and tool calls as they happen, keeps every conversation, and can attach to a server running elsewhere. Its navigation follows [Crush](https://github.com/charmbracelet/crush): a command palette (`ctrl+p`), `tab` into the transcript to select, expand and copy items, and a sidebar on wide terminals.
 
 ## Where it's going
 
-- **A terminal UI** to talk to it.
 - **Connections to my accounts:** email, calendar and the rest, through MCP.
 - **Triggers:** schedules and an inbox, so it acts without being asked.
 - **Confirmation before risky actions.**
@@ -35,14 +35,18 @@ Requires Go, Docker and [Task](https://taskfile.dev).
 cp .env.example .env   # add OPENROUTER_API_KEY
 task tools             # pinned dev tools
 task up                # Postgres with pgvector
-task run               # migrates the database, then runs agentd
+task run               # migrates the database, starts the server and opens the TUI
 ```
 
-`shell` and `write` can do anything the process can, so run agentd in a container if you want it isolated. MCP servers are configured in `mcp.yaml`; see `mcp.example.yaml`.
+To use it from anywhere, `task install` puts the `agent` binary on your PATH (in `GOBIN`, or `GOPATH/bin`). The installed binary reads its settings from the environment, not from `.env`, so export them in your shell (see `.env.example`). Set `MCP_CONFIG` and `WORKSPACE_DIR` to absolute paths too: they default to `mcp.yaml` and `workspace` in the current directory, so a binary run from elsewhere would load no MCP servers and create a `workspace/` wherever you are. `task uninstall` removes it.
+
+`agent` runs the server and the TUI in one process. To run them apart, start `agent serve` (set `AGENT_TOKEN`) and connect with `agent attach http://host:7433`.
+
+`shell` and `write` can do anything the process can, so run the server in a container if you want it isolated. MCP servers are configured in `mcp.yaml`; see `mcp.example.yaml`.
 
 ## Built with
 
-Go, [Eino](https://github.com/cloudwego/eino) for agents, OpenRouter for every model, embedding and search call, Postgres with pgvector, [River](https://riverqueue.com) for jobs, sqlc and goose.
+Go, [Eino](https://github.com/cloudwego/eino) for agents, OpenRouter for every model, embedding and search call, Postgres with pgvector, [River](https://riverqueue.com) for jobs, sqlc and goose, a protobuf API on [Connect](https://connectrpc.com), and [Bubble Tea](https://github.com/charmbracelet/bubbletea) for the TUI. The TUI's scrolling list and spinner are copied from Crush, under its licence in `internal/tui/LICENSE-crush.md`.
 
 ## Docs
 

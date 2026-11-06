@@ -50,7 +50,7 @@ func TestSubagent(t *testing.T) {
 	send := func(t *testing.T, args string) map[string]any {
 		t.Helper()
 		delegate = args
-		turn, err := e.Chat.Send(ctx, conv.ID, "go", nil)
+		turn, err := e.Chat.Send(ctx, conv.ID, "go", agent.Observer{})
 		require.NoError(t, err)
 		var res map[string]any
 		require.NoError(t, json.Unmarshal([]byte(strings.TrimPrefix(turn.Final, "result: ")), &res), "final = %q", turn.Final)

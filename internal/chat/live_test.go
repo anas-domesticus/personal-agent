@@ -45,14 +45,14 @@ func TestLiveAdmin(t *testing.T) {
 		"Then create a workflow named greet with a single node using it, run it with input {\"name\": \"Lewis\"} waiting up to 120 seconds, " +
 		"and tell me the greeting it produced. Don't ask me to confirm; just do it."
 
-	turn, err := e.Chat.Send(ctx, id, prompt, func(m *schema.Message) {
+	turn, err := e.Chat.Send(ctx, id, prompt, agent.Observer{Message: func(m *schema.Message) {
 		for _, tc := range m.ToolCalls {
 			t.Logf("tool call: %s %s", tc.Function.Name, tc.Function.Arguments)
 		}
 		if m.Role == schema.Tool {
 			t.Logf("tool result: %.300s", m.Content)
 		}
-	})
+	}})
 	require.NoError(t, err)
 	t.Logf("final: %s", turn.Final)
 	t.Logf("tokens: prompt=%d completion=%d", turn.PromptTokens, turn.CompletionTokens)
@@ -86,11 +86,11 @@ func TestLiveSubagentSearch(t *testing.T) {
 	turn, err := e.Chat.Send(ctx, conv.ID,
 		"Use the subagent tool with model "+slug+" and only the web_search tool to find the latest stable Go release version. "+
 			"Then tell me the version. Don't ask me anything.",
-		func(m *schema.Message) {
+		agent.Observer{Message: func(m *schema.Message) {
 			for _, tc := range m.ToolCalls {
 				t.Logf("tool call: %s %.300s", tc.Function.Name, tc.Function.Arguments)
 			}
-		})
+		}})
 	require.NoError(t, err)
 	t.Logf("final: %s", turn.Final)
 

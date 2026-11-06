@@ -1,12 +1,14 @@
 // Package testenv builds the full stack against a throwaway Postgres, with
 // scripted fake models, for integration tests. It uses the same wiring as
-// agentd (package app).
+// the server (package app).
 package testenv
 
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/url"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -119,14 +121,19 @@ type fakeModel struct {
 	slug string
 }
 
-func (f *fakeModel) Generate(_ context.Context, msgs []*schema.Message, _ ...model.Option) (*schema.Message, error) {
+func (f *fakeModel) Generate(ctx context.Context, msgs []*schema.Message, _ ...model.Option) (*schema.Message, error) {
 	f.env.mu.Lock()
 	r := f.env.models[f.slug]
 	f.env.mu.Unlock()
 	if r == nil {
 		return schema.AssistantMessage("ok", nil), nil
 	}
-	if m := r(msgs); m != nil {
+	m := r(msgs)
+	// Like a real model call, one whose context ended returns its error.
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("fake model: %w", err)
+	}
+	if m != nil {
 		return m, nil
 	}
 	return nil, errors.New("fake model failure")
@@ -137,7 +144,20 @@ func (f *fakeModel) Stream(ctx context.Context, msgs []*schema.Message, opts ...
 	if err != nil {
 		return nil, err
 	}
-	return schema.StreamReaderFromArray([]*schema.Message{m}), nil
+	return schema.StreamReaderFromArray(chunks(m)), nil
+}
+
+// chunks splits a reply the way a streaming model sends it: the content a
+// word at a time, with tool calls and metadata on the last chunk.
+func chunks(m *schema.Message) []*schema.Message {
+	words := strings.SplitAfter(m.Content, " ")
+	out := make([]*schema.Message, 0, len(words))
+	for _, w := range words {
+		out = append(out, &schema.Message{Role: m.Role, Content: w})
+	}
+	last := out[len(out)-1]
+	last.ToolCalls, last.ResponseMeta, last.ReasoningContent = m.ToolCalls, m.ResponseMeta, m.ReasoningContent
+	return out
 }
 
 func (f *fakeModel) WithTools([]*schema.ToolInfo) (model.ToolCallingChatModel, error) { return f, nil }

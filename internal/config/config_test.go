@@ -32,6 +32,7 @@ func TestLoad(t *testing.T) {
 				Workspace:      config.WorkspaceLocal,
 				WorkspaceDir:   "workspace",
 				MCPConfigPath:  missingMCP,
+				ListenAddr:     "127.0.0.1:7433",
 			},
 		},
 		{
@@ -40,11 +41,13 @@ func TestLoad(t *testing.T) {
 				"DATABASE_URL": "postgres://db", "OPENROUTER_API_KEY": "key",
 				"EMBEDDING_MODEL": "e/m", "ADMIN_MODEL": "a/m", "SEARCH_MODEL": "s/m",
 				"WORKSPACE": config.WorkspaceSandbox, "WORKSPACE_DIR": "/ws",
+				"AGENT_LISTEN": ":9000", "AGENT_TOKEN": "tok",
 			},
 			want: config.Config{
 				DatabaseURL: "postgres://db", OpenRouterAPIKey: "key",
 				EmbeddingModel: "e/m", AdminModel: "a/m", SearchModel: "s/m",
 				Workspace: config.WorkspaceSandbox, WorkspaceDir: "/ws", MCPConfigPath: missingMCP,
+				ListenAddr: ":9000", Token: "tok",
 			},
 		},
 		{name: "database url is required", env: map[string]string{}, wantErr: "DATABASE_URL is required"},
@@ -55,7 +58,7 @@ func TestLoad(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			for _, k := range []string{
 				"DATABASE_URL", "OPENROUTER_API_KEY", "EMBEDDING_MODEL", "ADMIN_MODEL",
-				"SEARCH_MODEL", "WORKSPACE", "WORKSPACE_DIR",
+				"SEARCH_MODEL", "WORKSPACE", "WORKSPACE_DIR", "AGENT_LISTEN", "AGENT_TOKEN",
 			} {
 				t.Setenv(k, tt.env[k])
 			}

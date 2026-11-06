@@ -26,6 +26,8 @@ var (
 	ErrBusy = errors.New("busy")
 	// ErrConflict means data changed underneath an operation.
 	ErrConflict = errors.New("conflict")
+	// ErrUnavailable means a service is shutting down and takes no new work.
+	ErrUnavailable = errors.New("unavailable")
 )
 
 // --- Agents -------------------------------------------------------------------

@@ -1,5 +1,6 @@
-// Package app wires the whole system together. Every binary (agentd, and
-// later the TUI) builds an App rather than repeating the wiring.
+// Package app wires the whole system together. Every binary that runs the
+// system (cmd/agent, and testenv for tests) builds an App rather than
+// repeating the wiring.
 //
 // Construction order is what makes the seams work without late binding:
 //
@@ -104,7 +105,7 @@ func New(ctx context.Context, cfg config.Config, opts Options) (_ *App, err erro
 		}
 		a.ownsDB = true
 	}
-	if a.Jobs, err = river.NewClient(riverpgxv5.New(a.Store.Pool), &river.Config{}); err != nil {
+	if a.Jobs, err = river.NewClient(riverpgxv5.New(a.Store.Pool), &river.Config{Logger: slog.Default()}); err != nil {
 		return nil, fmt.Errorf("river client: %w", err)
 	}
 
@@ -185,7 +186,7 @@ func New(ctx context.Context, cfg config.Config, opts Options) (_ *App, err erro
 	// Each queue is worked only where it can be: runs need models, and
 	// embeddings need an embedder. Jobs for an unworked queue wait for a
 	// process that can work it.
-	rc := &river.Config{}
+	rc := &river.Config{Logger: slog.Default()}
 	if embedder != nil {
 		embed.Register(rc, a.Store.Queries, embedder, cfg.EmbeddingModel)
 	}
@@ -215,9 +216,13 @@ func (a *App) Start() error {
 	return nil
 }
 
-// Close stops working jobs, letting running ones finish until ctx ends and
-// cancelling the rest, then disconnects everything.
+// Close interrupts running chat turns and waits for them to be saved, stops
+// working jobs, letting running ones finish until ctx ends and cancelling the
+// rest, then disconnects everything.
 func (a *App) Close(ctx context.Context) {
+	if a.Chat != nil {
+		a.Chat.Close(ctx)
+	}
 	if a.worker != nil {
 		if err := a.worker.Stop(ctx); err != nil {
 			slog.Warn("jobs did not finish in time; cancelling them", "err", err)

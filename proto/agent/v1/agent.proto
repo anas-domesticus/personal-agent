@@ -1,0 +1,186 @@
+syntax = "proto3";
+
+// The API between the agent server and its clients (the TUI, for now).
+//
+// Conversations are threads of messages with one agent. A turn is one user
+// message and everything the agent does in reply; SendMessage streams it as
+// it happens.
+package agent.v1;
+
+import "google/protobuf/timestamp.proto";
+
+// AgentService describes the agents clients can talk to.
+service AgentService {
+  // ListAgents returns every agent, by name.
+  rpc ListAgents(ListAgentsRequest) returns (ListAgentsResponse) {}
+  // GetAgent returns an agent and its current version.
+  rpc GetAgent(GetAgentRequest) returns (GetAgentResponse) {}
+}
+
+// ConversationService runs conversations with agents.
+service ConversationService {
+  // CreateConversation starts an empty conversation with an agent.
+  rpc CreateConversation(CreateConversationRequest) returns (CreateConversationResponse) {}
+  // ListConversations returns recent conversations, most recently active
+  // first.
+  rpc ListConversations(ListConversationsRequest) returns (ListConversationsResponse) {}
+  // GetConversation returns a conversation and its stored messages.
+  rpc GetConversation(GetConversationRequest) returns (GetConversationResponse) {}
+  // SendMessage runs a turn and streams it. The turn belongs to the server:
+  // if the client goes away it still runs to the end and is saved. A
+  // conversation runs one turn at a time; sending to a busy one fails with
+  // FAILED_PRECONDITION.
+  rpc SendMessage(SendMessageRequest) returns (stream SendMessageResponse) {}
+  // CancelTurn interrupts the conversation's running turn, if any.
+  rpc CancelTurn(CancelTurnRequest) returns (CancelTurnResponse) {}
+}
+
+message Agent {
+  string name = 1;
+  string description = 2;
+  bool admin = 3;
+  // The current version, or 0 if there is none.
+  int32 version = 4;
+  // The current version's model (an OpenRouter slug).
+  string model = 5;
+  // The tools the current version turns on, by name. Admin tools are not
+  // listed.
+  repeated string tools = 6;
+}
+
+message ListAgentsRequest {}
+
+message ListAgentsResponse {
+  repeated Agent agents = 1;
+}
+
+message GetAgentRequest {
+  string name = 1;
+}
+
+message GetAgentResponse {
+  Agent agent = 1;
+}
+
+message Conversation {
+  string id = 1;
+  // The agent's name; empty for an ad-hoc subagent.
+  string agent = 2;
+  // Set for a subagent's conversation: the conversation that started it.
+  string parent_id = 3;
+  // The first line of the first message; empty until a turn is saved.
+  string title = 4;
+  google.protobuf.Timestamp create_time = 5;
+  google.protobuf.Timestamp update_time = 6;
+}
+
+enum Role {
+  ROLE_UNSPECIFIED = 0;
+  ROLE_SYSTEM = 1;
+  ROLE_USER = 2;
+  ROLE_ASSISTANT = 3;
+  ROLE_TOOL = 4;
+}
+
+message ToolCall {
+  string id = 1;
+  string name = 2;
+  // The arguments as JSON.
+  string arguments = 3;
+}
+
+message Message {
+  Role role = 1;
+  string content = 2;
+  // The model's reasoning, for models that expose it.
+  string reasoning = 3;
+  // For an assistant message: the tools it calls.
+  repeated ToolCall tool_calls = 4;
+  // For a tool message: the call it answers and the tool's name.
+  string tool_call_id = 5;
+  string tool_name = 6;
+}
+
+message CreateConversationRequest {
+  string agent = 1;
+}
+
+message CreateConversationResponse {
+  Conversation conversation = 1;
+}
+
+message ListConversationsRequest {
+  // At most this many; the server picks a default when 0.
+  int32 limit = 1;
+}
+
+message ListConversationsResponse {
+  repeated Conversation conversations = 1;
+}
+
+message GetConversationRequest {
+  string id = 1;
+}
+
+message GetConversationResponse {
+  Conversation conversation = 1;
+  repeated Message messages = 2;
+  // Whether a turn is running now.
+  bool busy = 3;
+}
+
+message SendMessageRequest {
+  string conversation_id = 1;
+  string text = 2;
+}
+
+// SendMessageResponse is one event in a turn: started, then any number of
+// deltas and messages, then completed.
+message SendMessageResponse {
+  oneof event {
+    TurnStarted started = 1;
+    MessageDelta delta = 2;
+    Message message = 3;
+    TurnCompleted completed = 4;
+  }
+}
+
+// TurnStarted names what is answering.
+message TurnStarted {
+  string agent = 1;
+  int32 version = 2;
+  string model = 3;
+}
+
+// MessageDelta is a fragment of the assistant message being streamed. The
+// complete message follows as a Message, which supersedes the fragments.
+message MessageDelta {
+  string content = 1;
+  string reasoning = 2;
+}
+
+enum TurnStatus {
+  TURN_STATUS_UNSPECIFIED = 0;
+  TURN_STATUS_COMPLETED = 1;
+  TURN_STATUS_FAILED = 2;
+  TURN_STATUS_INTERRUPTED = 3;
+}
+
+message TurnCompleted {
+  TurnStatus status = 1;
+  // Why the turn failed, when it did.
+  string error = 2;
+  int64 prompt_tokens = 3;
+  int64 completion_tokens = 4;
+  // The conversation after the turn, e.g. with its new title.
+  Conversation conversation = 5;
+}
+
+message CancelTurnRequest {
+  string conversation_id = 1;
+}
+
+message CancelTurnResponse {
+  // Whether a turn was running.
+  bool cancelled = 1;
+}

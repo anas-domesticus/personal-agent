@@ -49,7 +49,7 @@ func TestConversation(t *testing.T) {
 	id := conv.ID
 
 	var seen []schema.RoleType
-	turn, err := e.Chat.Send(ctx, id, "what agents exist?", func(m *schema.Message) { seen = append(seen, m.Role) })
+	turn, err := e.Chat.Send(ctx, id, "what agents exist?", agent.Observer{Message: func(m *schema.Message) { seen = append(seen, m.Role) }})
 	require.NoError(t, err)
 	assert.Equal(t, "Just me: admin.", turn.Final)
 	// assistant tool call, tool result, assistant answer
@@ -65,7 +65,7 @@ func TestConversation(t *testing.T) {
 
 	// The next turn is given the system prompt, the 4 stored messages and the
 	// new one.
-	turn, err = e.Chat.Send(ctx, id, "and now?", nil)
+	turn, err = e.Chat.Send(ctx, id, "and now?", agent.Observer{})
 	require.NoError(t, err)
 	assert.Equal(t, "history has 6 messages", turn.Final)
 
@@ -86,7 +86,7 @@ func TestFailedTurnLeavesNoTrace(t *testing.T) {
 
 	conv, err := e.Chat.Start(ctx, agent.AdminName)
 	require.NoError(t, err)
-	_, err = e.Chat.Send(ctx, conv.ID, "break", nil)
+	_, err = e.Chat.Send(ctx, conv.ID, "break", agent.Observer{})
 	require.Error(t, err, "expected the turn to fail")
 	h, err := e.Chat.History(ctx, conv.ID)
 	require.NoError(t, err)
@@ -94,7 +94,7 @@ func TestFailedTurnLeavesNoTrace(t *testing.T) {
 
 	// A turn whose caller goes away after the model replied is still saved.
 	cctx, cancel := context.WithCancel(ctx)
-	_, err = e.Chat.Send(cctx, conv.ID, "hello", func(*schema.Message) { cancel() })
+	_, err = e.Chat.Send(cctx, conv.ID, "hello", agent.Observer{Message: func(*schema.Message) { cancel() }})
 	require.NoError(t, err)
 	h, err = e.Chat.History(ctx, conv.ID)
 	require.NoError(t, err)
@@ -116,11 +116,11 @@ func TestOneTurnAtATime(t *testing.T) {
 	require.NoError(t, err)
 	done := make(chan error)
 	go func() {
-		_, err := e.Chat.Send(ctx, conv.ID, "first", nil)
+		_, err := e.Chat.Send(ctx, conv.ID, "first", agent.Observer{})
 		done <- err
 	}()
 	<-started
-	_, err = e.Chat.Send(ctx, conv.ID, "second", nil)
+	_, err = e.Chat.Send(ctx, conv.ID, "second", agent.Observer{})
 	require.ErrorIs(t, err, domain.ErrBusy, "concurrent send")
 	close(release)
 	require.NoError(t, <-done)
@@ -149,7 +149,7 @@ func TestFailedTurnAfterToolsIsKept(t *testing.T) {
 	})
 	conv, err := e.Chat.Start(ctx, agent.AdminName)
 	require.NoError(t, err)
-	_, err = e.Chat.Send(ctx, conv.ID, "remember I like tea", nil)
+	_, err = e.Chat.Send(ctx, conv.ID, "remember I like tea", agent.Observer{})
 	require.Error(t, err, "expected the turn to fail")
 	h, err := e.Chat.History(ctx, conv.ID)
 	require.NoError(t, err)

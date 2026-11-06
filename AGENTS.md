@@ -18,7 +18,7 @@ Guidance for AI agents and people working in this repo. Read this first, then th
    - lint;
    - every test except live ones.
    Never mark work complete with failures. Never skip or weaken a check to get green.
-3. **Never edit generated code:** `internal/store/db` (sqlc), `**/mocks_test.go` and `internal/mocks` (mockery). Change the source and run `task generate`.
+3. **Never edit generated code:** `internal/gen` (buf, from `proto/`), `internal/store/db` (sqlc), `**/mocks_test.go` and `internal/mocks` (mockery). Change the source and run `task generate`.
 4. **Never edit a committed migration.** Add a new one with `task migration:new -- name`.
 5. **Agent and workflow versions are immutable.** Change them by adding a new version.
 6. **Memory is on hold.** The user is designing the memory subsystem. Leave `memories`, `search_memories` and `remember` alone unless asked.
@@ -32,8 +32,11 @@ Everything runs through [Task](https://taskfile.dev). See [Taskfile.yml](Taskfil
 |---|---|
 | `task tools` | Install pinned golangci-lint, sqlc and goose (mockery runs via `go tool`) |
 | `task up` / `task down` | Start or stop the local Postgres |
-| `task run` | Run agentd (it migrates on start) |
-| `task generate` | Regenerate sqlc code and mocks |
+| `task run` | Start the server in-process and open the TUI on it (migrates on start; `task run -- -c` continues the last conversation) |
+| `task serve` / `task attach` | Run only the server, or open the TUI on a running one |
+| `task install` / `task uninstall` | Put the `agent` binary on your PATH (GOBIN, else GOPATH/bin), or remove it |
+| `task proto` | Regenerate the API code in `internal/gen` from `proto/` |
+| `task generate` | Regenerate the protobuf API code, sqlc code and mocks |
 | `task fmt` | Format code |
 | `task lint` | golangci-lint |
 | `task test:unit` | Unit tests only; no Docker or network |
@@ -69,7 +72,10 @@ Before a non-trivial change is committed, have it reviewed by a fresh reviewer: 
 ## Where things live
 
 ```
-cmd/agentd/              entrypoint
+cmd/agent/               entrypoint: server, TUI, or both
+proto/                   the API contract (protobuf); generated into internal/gen
+internal/server/         the Connect API over the services
+internal/client, tui/    the API client and the terminal UI built on it (tui/list and tui/anim are copied from Crush)
 internal/app/            composition root: builds and wires everything
 internal/domain/         shared types and sentinel errors
 internal/<service>/      catalog, chat, runs, agent, embed, ...

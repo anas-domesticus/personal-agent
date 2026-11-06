@@ -154,7 +154,7 @@ func (b *Builder) runSubagent(ctx context.Context, in subagentIn, callerTools do
 		return subagentOut{}, err
 	}
 	user := schema.UserMessage(in.Prompt)
-	turn, runErr := r.Run(domain.WithConversation(ctx, conv.ID), Window(append(history, user), DefaultHistoryChars), nil)
+	turn, runErr := r.Run(domain.WithConversation(ctx, conv.ID), Window(append(history, user), DefaultHistoryChars), Observer{})
 
 	// Save what happened, as chat does: the whole turn, or on failure the
 	// settled part if tools ran.

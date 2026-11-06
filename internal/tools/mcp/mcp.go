@@ -121,7 +121,7 @@ func (s *Set) check(ctx context.Context, name string) {
 	cli, missing := srv.client, len(srv.cfg.Missing) > 0
 	s.mu.RUnlock()
 	if missing {
-		return // can't connect until the config is fixed and agentd restarts
+		return // can't connect until the config is fixed and the server restarts
 	}
 	if cli != nil {
 		pctx, cancel := context.WithTimeout(ctx, srv.cfg.Timeout)

@@ -157,7 +157,7 @@ func (w *Worker) runNode(ctx context.Context, runID uuid.UUID, node workflow.Nod
 
 	// One attempt, plus one correction if the reply doesn't fit the schema.
 	for attempt := 0; ; attempt++ {
-		turn, err := a.Run(ctx, transcript, nil)
+		turn, err := a.Run(ctx, transcript, agent.Observer{})
 		transcript = append(transcript, turn.Messages...)
 		res.Transcript = marshalTranscript(transcript)
 		res.PromptTokens += turn.PromptTokens

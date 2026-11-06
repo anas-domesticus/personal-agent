@@ -86,8 +86,8 @@ func (_c *MockRunnable_Info_Call) RunAndReturn(run func() Info) *MockRunnable_In
 }
 
 // Run provides a mock function for the type MockRunnable
-func (_mock *MockRunnable) Run(ctx context.Context, history []*schema.Message, onMessage func(*schema.Message)) (Turn, error) {
-	ret := _mock.Called(ctx, history, onMessage)
+func (_mock *MockRunnable) Run(ctx context.Context, history []*schema.Message, obs Observer) (Turn, error) {
+	ret := _mock.Called(ctx, history, obs)
 
 	if len(ret) == 0 {
 		panic("no return value specified for Run")
@@ -95,16 +95,16 @@ func (_mock *MockRunnable) Run(ctx context.Context, history []*schema.Message, o
 
 	var r0 Turn
 	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(context.Context, []*schema.Message, func(*schema.Message)) (Turn, error)); ok {
-		return returnFunc(ctx, history, onMessage)
+	if returnFunc, ok := ret.Get(0).(func(context.Context, []*schema.Message, Observer) (Turn, error)); ok {
+		return returnFunc(ctx, history, obs)
 	}
-	if returnFunc, ok := ret.Get(0).(func(context.Context, []*schema.Message, func(*schema.Message)) Turn); ok {
-		r0 = returnFunc(ctx, history, onMessage)
+	if returnFunc, ok := ret.Get(0).(func(context.Context, []*schema.Message, Observer) Turn); ok {
+		r0 = returnFunc(ctx, history, obs)
 	} else {
 		r0 = ret.Get(0).(Turn)
 	}
-	if returnFunc, ok := ret.Get(1).(func(context.Context, []*schema.Message, func(*schema.Message)) error); ok {
-		r1 = returnFunc(ctx, history, onMessage)
+	if returnFunc, ok := ret.Get(1).(func(context.Context, []*schema.Message, Observer) error); ok {
+		r1 = returnFunc(ctx, history, obs)
 	} else {
 		r1 = ret.Error(1)
 	}
@@ -119,12 +119,12 @@ type MockRunnable_Run_Call struct {
 // Run is a helper method to define mock.On call
 //   - ctx context.Context
 //   - history []*schema.Message
-//   - onMessage func(*schema.Message)
-func (_e *MockRunnable_Expecter) Run(ctx any, history any, onMessage any) *MockRunnable_Run_Call {
-	return &MockRunnable_Run_Call{Call: _e.mock.On("Run", ctx, history, onMessage)}
+//   - obs Observer
+func (_e *MockRunnable_Expecter) Run(ctx any, history any, obs any) *MockRunnable_Run_Call {
+	return &MockRunnable_Run_Call{Call: _e.mock.On("Run", ctx, history, obs)}
 }
 
-func (_c *MockRunnable_Run_Call) Run(run func(ctx context.Context, history []*schema.Message, onMessage func(*schema.Message))) *MockRunnable_Run_Call {
+func (_c *MockRunnable_Run_Call) Run(run func(ctx context.Context, history []*schema.Message, obs Observer)) *MockRunnable_Run_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		var arg0 context.Context
 		if args[0] != nil {
@@ -134,9 +134,9 @@ func (_c *MockRunnable_Run_Call) Run(run func(ctx context.Context, history []*sc
 		if args[1] != nil {
 			arg1 = args[1].([]*schema.Message)
 		}
-		var arg2 func(*schema.Message)
+		var arg2 Observer
 		if args[2] != nil {
-			arg2 = args[2].(func(*schema.Message))
+			arg2 = args[2].(Observer)
 		}
 		run(
 			arg0,
@@ -152,7 +152,7 @@ func (_c *MockRunnable_Run_Call) Return(turn Turn, err error) *MockRunnable_Run_
 	return _c
 }
 
-func (_c *MockRunnable_Run_Call) RunAndReturn(run func(ctx context.Context, history []*schema.Message, onMessage func(*schema.Message)) (Turn, error)) *MockRunnable_Run_Call {
+func (_c *MockRunnable_Run_Call) RunAndReturn(run func(ctx context.Context, history []*schema.Message, obs Observer) (Turn, error)) *MockRunnable_Run_Call {
 	_c.Call.Return(run)
 	return _c
 }

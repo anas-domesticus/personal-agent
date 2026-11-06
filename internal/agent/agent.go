@@ -29,8 +29,20 @@ var adminPrompt string
 type Runnable interface {
 	Info() Info
 	// Run sends the history to the agent and collects everything it
-	// produces. onMessage, if set, sees each message as it completes.
-	Run(ctx context.Context, history []*schema.Message, onMessage func(*schema.Message)) (Turn, error)
+	// produces, reporting it to obs as it happens.
+	Run(ctx context.Context, history []*schema.Message, obs Observer) (Turn, error)
+}
+
+// Observer watches a turn as it happens. Every field is optional.
+type Observer struct {
+	// Started is called once, before the model is first called.
+	Started func(Info)
+	// Delta sees fragments of each assistant message as the model streams
+	// it. Setting it makes the model stream; Message still sees the
+	// complete message afterwards.
+	Delta func(chunk *schema.Message)
+	// Message sees each message once it is complete.
+	Message func(*schema.Message)
 }
 
 // Info identifies what an agent was built from.
