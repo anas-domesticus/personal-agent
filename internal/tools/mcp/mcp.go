@@ -222,7 +222,7 @@ func connect(life context.Context, srv config.MCPServer) (*client.Client, []tool
 
 	raw, err := einomcp.GetTools(ctx, &einomcp.Config{Cli: cli, ToolNameList: srv.Tools})
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, fmt.Errorf("list tools: %w", err)
 	}
 
 	var wrapped []tool.InvokableTool
@@ -234,7 +234,7 @@ func connect(life context.Context, srv config.MCPServer) (*client.Client, []tool
 		}
 		info, err := it.Info(ctx)
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, fmt.Errorf("describe tool: %w", err)
 		}
 		name := srv.Name + Separator + info.Name
 		switch {
@@ -271,7 +271,7 @@ func newClient(ctx context.Context, srv config.MCPServer) (*client.Client, error
 	case config.TransportHTTP:
 		cli, err := client.NewStreamableHttpClient(srv.URL, transport.WithHTTPHeaders(srv.Headers))
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("new http client: %w", err)
 		}
 		if err := cli.Start(ctx); err != nil {
 			return nil, fmt.Errorf("connect: %w", err)
@@ -281,7 +281,7 @@ func newClient(ctx context.Context, srv config.MCPServer) (*client.Client, error
 	case config.TransportSSE:
 		cli, err := client.NewSSEMCPClient(srv.URL, transport.WithHeaders(srv.Headers))
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("new sse client: %w", err)
 		}
 		if err := cli.Start(ctx); err != nil {
 			return nil, fmt.Errorf("connect: %w", err)
@@ -295,13 +295,13 @@ func newClient(ctx context.Context, srv config.MCPServer) (*client.Client, error
 // process plus its configured env.
 func minimalEnvCommand(ctx context.Context, command string, env []string, args []string) (*exec.Cmd, error) {
 	cmd := exec.CommandContext(ctx, command, args...)
-	base := make([]string, 0, len(inheritedEnv)+len(env))
+	cmd.Env = make([]string, 0, len(inheritedEnv)+len(env))
 	for _, k := range inheritedEnv {
 		if v, ok := os.LookupEnv(k); ok {
-			base = append(base, k+"="+v)
+			cmd.Env = append(cmd.Env, k+"="+v)
 		}
 	}
-	cmd.Env = append(base, env...)
+	cmd.Env = append(cmd.Env, env...)
 	return cmd, nil
 }
 
@@ -421,7 +421,7 @@ func (t *namedTool) InvokableRun(ctx context.Context, args string, opts ...tool.
 	out, err := t.inner.InvokableRun(ctx, args, opts...)
 	if err != nil {
 		if ctx.Err() != nil {
-			return "", ctx.Err()
+			return "", fmt.Errorf("mcp tool %s: %w", t.info.Name, ctx.Err())
 		}
 		b, _ := json.Marshal(kit.Result[struct{}]{Error: err.Error()})
 		return string(b), nil

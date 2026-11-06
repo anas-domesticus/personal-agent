@@ -78,7 +78,7 @@ func New[T, D any](name, desc string, fn func(context.Context, T) (D, error)) (t
 		return Result[D]{OK: true, Data: &out}, nil
 	})
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("build tool %q: %w", name, err)
 	}
 	return Capped(t), nil
 }

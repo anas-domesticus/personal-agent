@@ -104,11 +104,11 @@ func (o *OpenRouter) Search(ctx context.Context, q Query) (Response, error) {
 		Plugins: []orPlugin{{ID: "web", MaxResults: n, Engine: o.cfg.Engine}},
 	})
 	if err != nil {
-		return Response{}, err
+		return Response{}, fmt.Errorf("web search: encoding request: %w", err)
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, o.cfg.BaseURL+"/chat/completions", bytes.NewReader(body))
 	if err != nil {
-		return Response{}, err
+		return Response{}, fmt.Errorf("web search: building request: %w", err)
 	}
 	req.Header.Set("Authorization", "Bearer "+o.cfg.APIKey)
 	req.Header.Set("Content-Type", "application/json")

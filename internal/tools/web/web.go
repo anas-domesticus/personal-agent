@@ -29,11 +29,22 @@ func (s *SearchSettings) Validate() error {
 	return nil
 }
 
+// Searcher runs web searches for web_search. search.Unavailable and
+// *search.OpenRouter implement it.
+type Searcher interface {
+	Search(ctx context.Context, q search.Query) (search.Response, error)
+}
+
+var (
+	_ Searcher = search.Unavailable{}
+	_ Searcher = (*search.OpenRouter)(nil)
+)
+
 // Specs returns the web_search and web_fetch tool specs. s runs searches
 // (use search.Unavailable when none is configured); client fetches pages and
 // defaults to http.DefaultClient's transport with no overall timeout (each
 // fetch has its own).
-func Specs(s search.Searcher, client *http.Client) ([]kit.Spec, error) {
+func Specs(s Searcher, client *http.Client) ([]kit.Spec, error) {
 	if s == nil {
 		s = search.Unavailable{}
 	}
@@ -74,7 +85,7 @@ func searchDescription() string {
 The current year is %d. Use this year when searching for recent information.`, time.Now().Year())
 }
 
-func newSearchTool(s search.Searcher, settings *SearchSettings) (tool.InvokableTool, error) {
+func newSearchTool(s Searcher, settings *SearchSettings) (tool.InvokableTool, error) {
 	limit := search.MaxMaxResults
 	if settings != nil && settings.MaxResults > 0 {
 		limit = settings.MaxResults

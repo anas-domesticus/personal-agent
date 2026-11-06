@@ -84,7 +84,7 @@ func fetch(ctx context.Context, client *http.Client, in fetchIn) (fetchOut, erro
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
 	if err != nil {
-		return fetchOut{}, err
+		return fetchOut{}, fmt.Errorf("build request: %w", err)
 	}
 	req.Header.Set("User-Agent", UserAgent)
 	req.Header.Set("Accept", acceptHeader(format))
@@ -92,7 +92,7 @@ func fetch(ctx context.Context, client *http.Client, in fetchIn) (fetchOut, erro
 
 	resp, err := client.Do(req)
 	if err != nil {
-		if ctx.Err() == context.DeadlineExceeded {
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 			return fetchOut{}, fmt.Errorf("fetch timed out after %ds", timeout)
 		}
 		return fetchOut{}, fmt.Errorf("fetch failed: %w", err)
@@ -107,7 +107,7 @@ func fetch(ctx context.Context, client *http.Client, in fetchIn) (fetchOut, erro
 	}
 	body, err := io.ReadAll(io.LimitReader(resp.Body, MaxFetchBytes+1))
 	if err != nil {
-		if ctx.Err() == context.DeadlineExceeded {
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 			return fetchOut{}, fmt.Errorf("fetch timed out after %ds", timeout)
 		}
 		return fetchOut{}, fmt.Errorf("reading response: %w", err)
@@ -189,14 +189,15 @@ func isText(mt string) bool {
 // the document, falling back to the bytes as they are.
 func decode(body []byte, contentType string) (string, error) {
 	r, err := charset.NewReader(bytes.NewReader(body), contentType)
-	if err != nil {
-		return string(body), nil
+	if err == nil {
+		b, err := io.ReadAll(r)
+		if err != nil {
+			return "", fmt.Errorf("decoding response: %w", err)
+		}
+		return string(b), nil
 	}
-	b, err := io.ReadAll(r)
-	if err != nil {
-		return "", fmt.Errorf("decoding response: %w", err)
-	}
-	return string(b), nil
+	// An unknown charset isn't fatal: return the bytes as they are.
+	return string(body), nil
 }
 
 var skipText = map[string]bool{

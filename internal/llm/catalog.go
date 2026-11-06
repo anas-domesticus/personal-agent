@@ -59,11 +59,11 @@ func (c *Catalog) models(ctx context.Context) (map[string]bool, error) {
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+"/models", nil)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("models list: build request: %w", err)
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("models list: %w", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {

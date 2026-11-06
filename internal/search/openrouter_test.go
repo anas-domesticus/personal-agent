@@ -3,29 +3,35 @@ package search
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
-func server(t *testing.T, status int, body string, check func(*http.Request, map[string]any)) *httptest.Server {
+// captured is what the test server saw of a request.
+type captured struct {
+	method, path, auth, contentType string
+	body                            map[string]any
+}
+
+// server answers every request with status and body, and passes what it saw
+// on the returned channel.
+func server(t *testing.T, status int, body string) (*httptest.Server, <-chan captured) {
 	t.Helper()
+	got := make(chan captured, 1)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var req map[string]any
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			t.Errorf("decoding request: %v", err)
-		}
-		if check != nil {
-			check(r, req)
-		}
+		c := captured{method: r.Method, path: r.URL.Path, auth: r.Header.Get("Authorization"), contentType: r.Header.Get("Content-Type")}
+		assert.NoError(t, json.NewDecoder(r.Body).Decode(&c.body), "decoding request")
+		got <- c
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(status)
 		_, _ = w.Write([]byte(body))
 	}))
 	t.Cleanup(srv.Close)
-	return srv
+	return srv, got
 }
 
 const okBody = `{
@@ -39,121 +45,122 @@ const okBody = `{
     ]}}]
 }`
 
-func TestOpenRouterRequestAndParse(t *testing.T) {
-	srv := server(t, 200, okBody, func(r *http.Request, req map[string]any) {
-		if r.Method != http.MethodPost || r.URL.Path != "/chat/completions" {
-			t.Errorf("got %s %s", r.Method, r.URL.Path)
-		}
-		if got := r.Header.Get("Authorization"); got != "Bearer key" {
-			t.Errorf("auth = %q", got)
-		}
-		if got := r.Header.Get("Content-Type"); got != "application/json" {
-			t.Errorf("content-type = %q", got)
-		}
-		if req["model"] != "m/x" {
-			t.Errorf("model = %v", req["model"])
-		}
-		msgs := req["messages"].([]any)
-		if len(msgs) != 2 || msgs[0].(map[string]any)["role"] != "system" ||
-			msgs[1].(map[string]any)["content"] != "go news" {
-			t.Errorf("messages = %v", msgs)
-		}
-		plugins := req["plugins"].([]any)
-		p := plugins[0].(map[string]any)
-		if p["id"] != "web" || p["max_results"] != float64(2) || p["engine"] != "exa" {
-			t.Errorf("plugin = %v", p)
-		}
-	})
-	s := NewOpenRouter(OpenRouterConfig{APIKey: "key", Model: "m/x", BaseURL: srv.URL + "/", Engine: "exa"})
-	res, err := s.Search(context.Background(), Query{Text: "go news", MaxResults: 2})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if res.Answer != "The answer." {
-		t.Errorf("answer = %q", res.Answer)
-	}
-	want := []Result{
-		{Title: "A", URL: "https://a.example", Snippet: "about a"},
-		{Title: "B", URL: "https://b.example", Snippet: "about b"},
-	}
-	if len(res.Results) != len(want) {
-		t.Fatalf("results = %+v", res.Results)
-	}
-	for i := range want {
-		if res.Results[i] != want[i] {
-			t.Errorf("result %d = %+v, want %+v", i, res.Results[i], want[i])
-		}
-	}
-}
+var (
+	resultA = Result{Title: "A", URL: "https://a.example", Snippet: "about a"}
+	resultB = Result{Title: "B", URL: "https://b.example", Snippet: "about b"}
+	resultC = Result{Title: "C", URL: "https://c.example", Snippet: "about c"}
+)
 
-func TestOpenRouterDefaults(t *testing.T) {
-	srv := server(t, 200, okBody, func(_ *http.Request, req map[string]any) {
-		p := req["plugins"].([]any)[0].(map[string]any)
-		if p["max_results"] != float64(DefaultMaxResults) {
-			t.Errorf("max_results = %v", p["max_results"])
-		}
-		if _, ok := p["engine"]; ok {
-			t.Errorf("engine should be omitted: %v", p)
-		}
-	})
-	s := NewOpenRouter(OpenRouterConfig{APIKey: "k", Model: "m", BaseURL: srv.URL})
-	res, err := s.Search(context.Background(), Query{Text: "q"})
-	if err != nil {
-		t.Fatal(err)
+func TestOpenRouterSearch(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name        string
+		engine      string
+		query       Query
+		wantPlugin  map[string]any
+		wantResults []Result
+	}{
+		{
+			name:        "engine and max results",
+			engine:      "exa",
+			query:       Query{Text: "go news", MaxResults: 2},
+			wantPlugin:  map[string]any{"id": "web", "max_results": float64(2), "engine": "exa"},
+			wantResults: []Result{resultA, resultB},
+		},
+		{
+			name:        "defaults omit the engine",
+			query:       Query{Text: "go news"},
+			wantPlugin:  map[string]any{"id": "web", "max_results": float64(DefaultMaxResults)},
+			wantResults: []Result{resultA, resultB, resultC},
+		},
+		{
+			name:        "max results are clamped",
+			query:       Query{Text: "go news", MaxResults: 50},
+			wantPlugin:  map[string]any{"id": "web", "max_results": float64(MaxMaxResults)},
+			wantResults: []Result{resultA, resultB, resultC},
+		},
 	}
-	if len(res.Results) != 3 {
-		t.Errorf("results = %+v", res.Results)
-	}
-}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			srv, got := server(t, http.StatusOK, okBody)
+			s := NewOpenRouter(OpenRouterConfig{APIKey: "key", Model: "m/x", BaseURL: srv.URL + "/", Engine: tt.engine})
 
-func TestOpenRouterClamp(t *testing.T) {
-	srv := server(t, 200, okBody, func(_ *http.Request, req map[string]any) {
-		p := req["plugins"].([]any)[0].(map[string]any)
-		if p["max_results"] != float64(MaxMaxResults) {
-			t.Errorf("max_results = %v", p["max_results"])
-		}
-	})
-	s := NewOpenRouter(OpenRouterConfig{APIKey: "k", Model: "m", BaseURL: srv.URL})
-	if _, err := s.Search(context.Background(), Query{Text: "q", MaxResults: 50}); err != nil {
-		t.Fatal(err)
+			res, err := s.Search(context.Background(), tt.query)
+			require.NoError(t, err)
+			assert.Equal(t, Response{Answer: "The answer.", Results: tt.wantResults}, res)
+
+			req := <-got
+			assert.Equal(t, http.MethodPost, req.method)
+			assert.Equal(t, "/chat/completions", req.path)
+			assert.Equal(t, "Bearer key", req.auth)
+			assert.Equal(t, "application/json", req.contentType)
+			assert.Equal(t, map[string]any{
+				"model": "m/x",
+				"messages": []any{
+					map[string]any{"role": "system", "content": systemPrompt},
+					map[string]any{"role": "user", "content": "go news"},
+				},
+				"plugins": []any{tt.wantPlugin},
+			}, req.body)
+		})
 	}
 }
 
 func TestOpenRouterErrors(t *testing.T) {
-	cases := []struct {
-		name   string
-		status int
-		body   string
-		want   string
+	t.Parallel()
+	tests := []struct {
+		name    string
+		status  int
+		body    string
+		wantErr string
 	}{
-		{"http error with message", 401, `{"error":{"code":401,"message":"No auth credentials found"}}`, "No auth credentials found"},
-		{"http error plain body", 502, `bad gateway`, "bad gateway"},
-		{"error in 200", 200, `{"error":{"code":"x","message":"provider failed"}}`, "provider failed"},
-		{"no choices", 200, `{"choices":[]}`, "no choices"},
-		{"bad json", 200, `nope`, "decoding"},
+		{name: "http error with message", status: 401, body: `{"error":{"code":401,"message":"No auth credentials found"}}`, wantErr: "No auth credentials found"},
+		{name: "http error plain body", status: 502, body: `bad gateway`, wantErr: "bad gateway"},
+		{name: "error in 200", status: 200, body: `{"error":{"code":"x","message":"provider failed"}}`, wantErr: "provider failed"},
+		{name: "no choices", status: 200, body: `{"choices":[]}`, wantErr: "no choices"},
+		{name: "bad json", status: 200, body: `nope`, wantErr: "decoding"},
 	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			srv := server(t, tc.status, tc.body, nil)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			srv, _ := server(t, tt.status, tt.body)
 			s := NewOpenRouter(OpenRouterConfig{APIKey: "k", Model: "m", BaseURL: srv.URL})
 			_, err := s.Search(context.Background(), Query{Text: "q"})
-			if err == nil || !strings.Contains(err.Error(), tc.want) {
-				t.Fatalf("err = %v, want containing %q", err, tc.want)
-			}
+			require.ErrorContains(t, err, tt.wantErr)
 		})
 	}
 }
 
 func TestOpenRouterEmptyQuery(t *testing.T) {
+	t.Parallel()
 	s := NewOpenRouter(OpenRouterConfig{APIKey: "k", Model: "m", BaseURL: "http://127.0.0.1:0"})
-	if _, err := s.Search(context.Background(), Query{Text: "  "}); err == nil {
-		t.Fatal("want error")
-	}
+	_, err := s.Search(context.Background(), Query{Text: "  "})
+	require.ErrorContains(t, err, "search query is empty")
 }
 
 func TestUnavailable(t *testing.T) {
+	t.Parallel()
 	_, err := Unavailable{}.Search(context.Background(), Query{Text: "q"})
-	if !errors.Is(err, ErrUnavailable) {
-		t.Fatalf("err = %v", err)
+	require.ErrorIs(t, err, ErrUnavailable)
+}
+
+func TestClampResults(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name string
+		n    int
+		want int
+	}{
+		{name: "zero uses the default", n: 0, want: DefaultMaxResults},
+		{name: "negative uses the default", n: -1, want: DefaultMaxResults},
+		{name: "in range", n: 3, want: 3},
+		{name: "over the maximum", n: 99, want: MaxMaxResults},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tt.want, ClampResults(tt.n))
+		})
 	}
 }

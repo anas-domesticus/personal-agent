@@ -10,13 +10,17 @@ import (
 	"github.com/anas-domesticus/personal-agent/internal/tools/kit"
 )
 
-func Tools() ([]tool.InvokableTool, error) {
+// Tools returns the current_time tool, which reads the system clock.
+func Tools() ([]tool.InvokableTool, error) { return tools(time.Now) }
+
+// tools takes the clock as a function so tests can fix the time.
+func tools(now func() time.Time) ([]tool.InvokableTool, error) {
 	return kit.Build(func() (tool.InvokableTool, error) {
 		return kit.New("current_time", "Get the current date and time.",
 			func(_ context.Context, _ struct{}) (timeOut, error) {
-				now := time.Now()
-				zone, _ := now.Zone()
-				return timeOut{Time: now.Format(time.RFC3339), Weekday: now.Weekday().String(), Zone: zone}, nil
+				t := now()
+				zone, _ := t.Zone()
+				return timeOut{Time: t.Format(time.RFC3339), Weekday: t.Weekday().String(), Zone: zone}, nil
 			})
 	})
 }
