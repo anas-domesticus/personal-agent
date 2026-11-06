@@ -17,12 +17,5 @@ services:
       timeout: 3s
       retries: 30
 
-  mosquitto:
-    image: eclipse-mosquitto:2.1.2-alpine
-    ports:
-      - "1883:1883"
-    volumes:
-      - ./deploy/mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
-
 volumes:
   postgres-data:

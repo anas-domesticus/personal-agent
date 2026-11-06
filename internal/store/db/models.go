@@ -19,6 +19,7 @@ type Agent struct {
 	CurrentVersion *int32    `json:"current_version"`
 	CreatedAt      time.Time `json:"created_at"`
 	UpdatedAt      time.Time `json:"updated_at"`
+	Admin          bool      `json:"admin"`
 }
 
 type AgentVersion struct {
@@ -30,6 +31,15 @@ type AgentVersion struct {
 	Config       json.RawMessage `json:"config"`
 	Notes        string          `json:"notes"`
 	CreatedAt    time.Time       `json:"created_at"`
+	OutputSchema json.RawMessage `json:"output_schema"`
+}
+
+type Conversation struct {
+	ID        uuid.UUID `json:"id"`
+	AgentID   uuid.UUID `json:"agent_id"`
+	Title     string    `json:"title"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 type Memory struct {
@@ -43,6 +53,47 @@ type Memory struct {
 	Search         interface{}      `json:"search"`
 	CreatedAt      time.Time        `json:"created_at"`
 	UpdatedAt      time.Time        `json:"updated_at"`
+}
+
+type Message struct {
+	ID             int64           `json:"id"`
+	ConversationID uuid.UUID       `json:"conversation_id"`
+	Role           string          `json:"role"`
+	Content        string          `json:"content"`
+	Message        json.RawMessage `json:"message"`
+	AgentVersion   *int32          `json:"agent_version"`
+	CreatedAt      time.Time       `json:"created_at"`
+}
+
+type Run struct {
+	ID              uuid.UUID       `json:"id"`
+	WorkflowID      uuid.UUID       `json:"workflow_id"`
+	WorkflowVersion int32           `json:"workflow_version"`
+	Status          string          `json:"status"`
+	Input           json.RawMessage `json:"input"`
+	Output          json.RawMessage `json:"output"`
+	Error           *string         `json:"error"`
+	TriggeredBy     string          `json:"triggered_by"`
+	CreatedAt       time.Time       `json:"created_at"`
+	StartedAt       *time.Time      `json:"started_at"`
+	FinishedAt      *time.Time      `json:"finished_at"`
+}
+
+type RunStep struct {
+	ID               int64           `json:"id"`
+	RunID            uuid.UUID       `json:"run_id"`
+	NodeID           string          `json:"node_id"`
+	AgentID          *uuid.UUID      `json:"agent_id"`
+	AgentVersion     *int32          `json:"agent_version"`
+	Status           string          `json:"status"`
+	Input            json.RawMessage `json:"input"`
+	Output           json.RawMessage `json:"output"`
+	Error            *string         `json:"error"`
+	Messages         json.RawMessage `json:"messages"`
+	PromptTokens     int32           `json:"prompt_tokens"`
+	CompletionTokens int32           `json:"completion_tokens"`
+	StartedAt        time.Time       `json:"started_at"`
+	FinishedAt       *time.Time      `json:"finished_at"`
 }
 
 type Workflow struct {

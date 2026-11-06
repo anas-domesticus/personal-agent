@@ -149,18 +149,18 @@ with semantic as (
     from (
         select id, embedding <=> $2::vector as distance
         from memories
-        where embedding is not null
-          and (cardinality($3::text[]) = 0 or tags @> $3::text[])
+        where $3::bool and embedding is not null
+          and (cardinality($4::text[]) = 0 or tags @> $4::text[])
         order by embedding <=> $2::vector
-        limit $4::int
+        limit $5::int
     ) s
 ),
 keyword as (
     select id, row_number() over (order by ts_rank_cd(search, q) desc) as rank
-    from memories, websearch_to_tsquery('english', $5::text) q
+    from memories, websearch_to_tsquery('english', $6::text) q
     where search @@ q
-      and (cardinality($3::text[]) = 0 or tags @> $3::text[])
-    limit $4::int
+      and (cardinality($4::text[]) = 0 or tags @> $4::text[])
+    limit $5::int
 )
 select m.id, m.content, m.tags, m.source, m.metadata, m.created_at,
        (coalesce(1.0 / (60 + s.rank), 0) + coalesce(1.0 / (60 + k.rank), 0))::float8 as score
@@ -172,11 +172,12 @@ limit $1::int
 `
 
 type SearchMemoriesParams struct {
-	Lim        int32           `json:"lim"`
-	Embedding  pgvector.Vector `json:"embedding"`
-	Tags       []string        `json:"tags"`
-	Candidates int32           `json:"candidates"`
-	Query      string          `json:"query"`
+	Lim         int32           `json:"lim"`
+	Embedding   pgvector.Vector `json:"embedding"`
+	UseSemantic bool            `json:"use_semantic"`
+	Tags        []string        `json:"tags"`
+	Candidates  int32           `json:"candidates"`
+	Query       string          `json:"query"`
 }
 
 type SearchMemoriesRow struct {
@@ -190,11 +191,13 @@ type SearchMemoriesRow struct {
 }
 
 // Hybrid search: reciprocal rank fusion of vector similarity and full-text rank.
+// With use_semantic false, only the keyword side contributes.
 // An empty tags array matches everything; otherwise memories must have all given tags.
 func (q *Queries) SearchMemories(ctx context.Context, arg SearchMemoriesParams) ([]SearchMemoriesRow, error) {
 	rows, err := q.db.Query(ctx, searchMemories,
 		arg.Lim,
 		arg.Embedding,
+		arg.UseSemantic,
 		arg.Tags,
 		arg.Candidates,
 		arg.Query,

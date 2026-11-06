@@ -32,13 +32,14 @@ delete from memories where id = $1;
 
 -- name: SearchMemories :many
 -- Hybrid search: reciprocal rank fusion of vector similarity and full-text rank.
+-- With use_semantic false, only the keyword side contributes.
 -- An empty tags array matches everything; otherwise memories must have all given tags.
 with semantic as (
     select id, row_number() over (order by distance) as rank
     from (
         select id, embedding <=> sqlc.arg(embedding)::vector as distance
         from memories
-        where embedding is not null
+        where sqlc.arg(use_semantic)::bool and embedding is not null
           and (cardinality(sqlc.arg(tags)::text[]) = 0 or tags @> sqlc.arg(tags)::text[])
         order by embedding <=> sqlc.arg(embedding)::vector
         limit sqlc.arg(candidates)::int

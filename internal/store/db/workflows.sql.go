@@ -98,6 +98,37 @@ func (q *Queries) GetCurrentWorkflowVersion(ctx context.Context, name string) (W
 	return i, err
 }
 
+const getWorkflow = `-- name: GetWorkflow :one
+select id, name, description, current_version, embedding_model, created_at, updated_at
+from workflows
+where id = $1
+`
+
+type GetWorkflowRow struct {
+	ID             uuid.UUID `json:"id"`
+	Name           string    `json:"name"`
+	Description    string    `json:"description"`
+	CurrentVersion *int32    `json:"current_version"`
+	EmbeddingModel *string   `json:"embedding_model"`
+	CreatedAt      time.Time `json:"created_at"`
+	UpdatedAt      time.Time `json:"updated_at"`
+}
+
+func (q *Queries) GetWorkflow(ctx context.Context, id uuid.UUID) (GetWorkflowRow, error) {
+	row := q.db.QueryRow(ctx, getWorkflow, id)
+	var i GetWorkflowRow
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.Description,
+		&i.CurrentVersion,
+		&i.EmbeddingModel,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const getWorkflowByName = `-- name: GetWorkflowByName :one
 select id, name, description, current_version, embedding_model, created_at, updated_at
 from workflows
@@ -286,16 +317,16 @@ with semantic as (
     from (
         select id, embedding <=> $2::vector as distance
         from workflows
-        where embedding is not null
+        where $3::bool and embedding is not null
         order by embedding <=> $2::vector
-        limit $3::int
+        limit $4::int
     ) s
 ),
 keyword as (
     select id, row_number() over (order by ts_rank_cd(search, q) desc) as rank
-    from workflows, websearch_to_tsquery('english', $4::text) q
+    from workflows, websearch_to_tsquery('english', $5::text) q
     where search @@ q
-    limit $3::int
+    limit $4::int
 )
 select w.id, w.name, w.description, w.current_version,
        (coalesce(1.0 / (60 + s.rank), 0) + coalesce(1.0 / (60 + k.rank), 0))::float8 as score
@@ -307,10 +338,11 @@ limit $1::int
 `
 
 type SearchWorkflowsParams struct {
-	Lim        int32           `json:"lim"`
-	Embedding  pgvector.Vector `json:"embedding"`
-	Candidates int32           `json:"candidates"`
-	Query      string          `json:"query"`
+	Lim         int32           `json:"lim"`
+	Embedding   pgvector.Vector `json:"embedding"`
+	UseSemantic bool            `json:"use_semantic"`
+	Candidates  int32           `json:"candidates"`
+	Query       string          `json:"query"`
 }
 
 type SearchWorkflowsRow struct {
@@ -322,10 +354,12 @@ type SearchWorkflowsRow struct {
 }
 
 // Hybrid search: reciprocal rank fusion of vector similarity and full-text rank.
+// With use_semantic false, only the keyword side contributes.
 func (q *Queries) SearchWorkflows(ctx context.Context, arg SearchWorkflowsParams) ([]SearchWorkflowsRow, error) {
 	rows, err := q.db.Query(ctx, searchWorkflows,
 		arg.Lim,
 		arg.Embedding,
+		arg.UseSemantic,
 		arg.Candidates,
 		arg.Query,
 	)

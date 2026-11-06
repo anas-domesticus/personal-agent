@@ -4,7 +4,7 @@ dotenv: [".env"]
 
 tasks:
   up:
-    desc: Start Postgres and Mosquitto
+    desc: Start Postgres
     cmds:
       - docker compose up -d --wait
 

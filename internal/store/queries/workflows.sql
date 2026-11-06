@@ -13,6 +13,11 @@ select id, name, description, current_version, embedding_model, created_at, upda
 from workflows
 order by name;
 
+-- name: GetWorkflow :one
+select id, name, description, current_version, embedding_model, created_at, updated_at
+from workflows
+where id = $1;
+
 -- name: UpdateWorkflowDescription :exec
 -- Clears the embedding so it is recomputed for the new text.
 update workflows
@@ -59,12 +64,13 @@ select * from workflow_versions where workflow_id = $1 order by version desc;
 
 -- name: SearchWorkflows :many
 -- Hybrid search: reciprocal rank fusion of vector similarity and full-text rank.
+-- With use_semantic false, only the keyword side contributes.
 with semantic as (
     select id, row_number() over (order by distance) as rank
     from (
         select id, embedding <=> sqlc.arg(embedding)::vector as distance
         from workflows
-        where embedding is not null
+        where sqlc.arg(use_semantic)::bool and embedding is not null
         order by embedding <=> sqlc.arg(embedding)::vector
         limit sqlc.arg(candidates)::int
     ) s
