@@ -1,12 +1,14 @@
 # personal-agent
 
-A Postgres-backed knowledge base in the making, with agents supporting the work of collecting, organising and using knowledge.
+A Postgres-backed knowledge and capability service that complements a personal agent.
 
 **Today, the implemented product is an orchestration and knowledge-graph MCP server, not a conversational assistant or question-answering interface.** Its 21 MCP tools manage agent definitions, DAG workflows, durable background runs and predefined knowledge nodes. The graph stores versioned objectives, workflows, claims, sources and agents, embeds every node's title and description, and supports semantic node search.
 
-## Direction
+## Product boundary and direction
 
-The long-term centre of the product is a durable, queryable knowledge base in Postgres. Agents will help curate and use that knowledge, including an **Ask a Question** experience grounded in what is stored. Ask a Question is future direction, not current behaviour. The former memory feature has been removed.
+This service complements a personal agent rather than replacing it. External consumer agents own human-facing LLM interactions; this service owns durable knowledge, deterministic question and evidence tooling, versioned workflow instruction sets and background capabilities suitable for cloud deployment. Question tooling returns structured nodes and evidence, not conversational answers. Workflows are reusable instruction sets, not queries to run against the knowledge base; external consumer agents can author, test and iterate them through immutable versions.
+
+That is the target boundary, not a claim that every capability exists today. The current implementation stores and searches knowledge nodes and runs explicitly requested DAG workflows. Deterministic question and evidence tooling, including **Ask a Question**, is future direction. The existing internal agent loop is retained for enrichment jobs and scheduled tasks only in that target boundary; scheduling itself is future direction and is not implemented here. Cloud deployment, scheduling and authentication do not currently exist. The former memory feature has been removed.
 
 ## What it does now
 

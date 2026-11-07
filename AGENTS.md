@@ -2,12 +2,13 @@
 
 Guidance for AI agents and people working in this repo. Read this first, then the documents it links to.
 
-**personal-agent** is becoming a Postgres-backed knowledge base, with agents supporting knowledge collection, organisation and use. The current implementation is an orchestration and knowledge-graph MCP server, not a question-answering product.
-- It serves 21 agent, workflow, run and knowledge-node tools over unauthenticated, stateless Streamable HTTP and runs workflows in the background.
+**personal-agent** is a Postgres-backed knowledge and capability service that complements a personal agent. External consumer agents own human-facing LLM interactions; this service owns durable knowledge, deterministic question and evidence tooling, versioned workflow instruction sets and background capabilities suitable for cloud deployment. The current implementation is an orchestration and knowledge-graph MCP server, not a conversational or question-answering product.
+- It serves 21 agent, workflow, run and knowledge-node tools over unauthenticated, stateless Streamable HTTP and runs explicitly requested workflows in the background.
 - Workflow agents use Eino over OpenRouter, Postgres and pgvector for storage, and River for jobs.
+- Workflows are instruction sets, not queries run against the knowledge base. External consumer agents may author, test and iterate them using immutable versions; do not propose or implement workflow changes as part of the product boundary.
 - Agent and workflow definitions, and graph-node snapshots, are immutable and stored in the database.
 - `internal/graph` is wired into `internal/app`, which registers versioned objective, workflow, claim, source and agent types. MCP exposes node upsert and semantic search; every changed node queues title and description embeddings.
-- Ask a Question is future direction. Memory has been removed; do not document or build on it as existing behaviour.
+- Deterministic question tooling will return structured nodes and evidence rather than conversational answers. Ask a Question is future direction. The existing internal agent loop is retained for enrichment jobs and scheduled tasks only in the target boundary; schedules are future and are not implemented. Cloud deployment and authentication are also not implemented. Memory has been removed; do not document or build on it as existing behaviour.
 
 [docs/architecture.md](docs/architecture.md) describes the system as it is now.
 
@@ -19,7 +20,7 @@ Guidance for AI agents and people working in this repo. Read this first, then th
 4. **Never edit a committed migration.** Add a new one with `task migration:new -- name`.
 5. **Agent, workflow and graph-node versions are immutable.** Change agent and workflow definitions by adding a new version; change versioned nodes by appending a snapshot or moving the current pointer with the graph repository.
 6. **The MCP server deliberately has no auth.** Keep the default listener on loopback, preserve DNS-rebinding and cross-origin protection, and never store secrets in tool output.
-7. **Commit or push only when asked.**
+7. **Make modular atomic commits for each completed task, including delegated subagent work. Push only when asked.**
 
 ## Commands
 

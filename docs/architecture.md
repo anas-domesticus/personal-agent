@@ -1,6 +1,14 @@
 # Architecture
 
-The product direction is a Postgres-backed knowledge base, with agents supporting knowledge collection, organisation and use. The current process is an MCP orchestration server: Postgres holds agent and workflow definitions and durable execution state, the process serves MCP and works background jobs, and there is no built-in conversational agent, user interface or Ask a Question operation. Ask a Question is future direction, not existing behaviour. The former memory feature is removed.
+The product direction is a Postgres-backed knowledge and capability service that complements a personal agent. The current process is an MCP orchestration server: Postgres holds agent and workflow definitions and durable execution state, the process serves MCP and works background jobs, and there is no built-in conversational agent, user interface or Ask a Question operation. The former memory feature is removed.
+
+## Product boundary
+
+External consumer agents own human-facing LLM interactions. This service owns durable knowledge, deterministic question and evidence tooling, versioned workflow instruction sets and background capabilities suitable for cloud deployment. Question tooling returns structured nodes and evidence rather than conversational answers. Workflows are reusable instruction sets, not queries run against the knowledge base. External consumer agents may author, test and iterate workflows using immutable versions; this boundary does not propose or implement changes to workflows or their execution engine.
+
+The current implementation stores and semantically searches structured knowledge nodes and runs explicitly requested DAG workflows. Deterministic question and evidence tooling, including Ask a Question, is future direction. In the target boundary, the existing internal agent loop is retained for enrichment jobs and scheduled tasks only; schedules themselves are future direction and no scheduling functionality exists. Cloud deployment and authentication also do not exist. These directions do not change the current behaviour documented below.
+
+## Current implementation
 
 All statements below describe current code. The graph database schema and `internal/graph` Go module are wired into `internal/app`, which registers versioned objective, workflow, claim, source and agent types and runs the graph-enrichment worker. MCP exposes node upsert and semantic search; no relationship kinds are registered by the base schema.
 
