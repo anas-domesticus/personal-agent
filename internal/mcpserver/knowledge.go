@@ -27,6 +27,24 @@ type knowledgeNodeMatchesOutput struct {
 	Nodes []map[string]any `json:"nodes"`
 }
 
+type addSupportedByInput struct {
+	ClaimID  string `json:"claim_id" jsonschema:"Claim node UUID."`
+	SourceID string `json:"source_id" jsonschema:"Source node UUID."`
+}
+
+type deleteSupportedByInput struct {
+	EdgeID string `json:"edge_id" jsonschema:"Supported-by relationship UUID."`
+}
+
+type listSupportedByInput struct {
+	ClaimID  string `json:"claim_id,omitempty" jsonschema:"Claim node UUID. Specify exactly one selector."`
+	SourceID string `json:"source_id,omitempty" jsonschema:"Source node UUID. Specify exactly one selector."`
+}
+
+type supportedByEdgesOutput struct {
+	Edges []map[string]any `json:"edges"`
+}
+
 func registerKnowledgeTools(s *mcp.Server, knowledge Knowledge) {
 	add(s, "upsert_knowledge_node", "Create or update a predefined knowledge node and queue its title and description embeddings.", writing, func(ctx context.Context, in upsertKnowledgeNodeInput) (map[string]any, error) {
 		var id uuid.UUID
@@ -52,5 +70,49 @@ func registerKnowledgeTools(s *mcp.Server, knowledge Knowledge) {
 		}
 		nodes, err := objects(out)
 		return knowledgeNodeMatchesOutput{Nodes: nodes}, err
+	})
+	add(s, "add_supported_by", "Create or return the relationship showing that a source supports a claim.", closedID, func(ctx context.Context, in addSupportedByInput) (map[string]any, error) {
+		claimID, err := uuid.Parse(in.ClaimID)
+		if err != nil {
+			return nil, fmt.Errorf("parse claim id: %w", err)
+		}
+		sourceID, err := uuid.Parse(in.SourceID)
+		if err != nil {
+			return nil, fmt.Errorf("parse source id: %w", err)
+		}
+		edge, err := knowledge.AddSupportedBy(ctx, claimID, sourceID)
+		if err != nil {
+			return nil, err
+		}
+		return object(edge)
+	})
+	add(s, "delete_supported_by", "Delete a claim-to-source support relationship by its edge ID.", writing, func(ctx context.Context, in deleteSupportedByInput) (struct{}, error) {
+		edgeID, err := uuid.Parse(in.EdgeID)
+		if err != nil {
+			return struct{}{}, fmt.Errorf("parse supported-by edge id: %w", err)
+		}
+		return struct{}{}, knowledge.DeleteSupportedBy(ctx, edgeID)
+	})
+	add(s, "list_supported_by", "List support relationships for exactly one claim or source in creation order.", readOnly, func(ctx context.Context, in listSupportedByInput) (supportedByEdgesOutput, error) {
+		var claimID, sourceID uuid.UUID
+		var err error
+		if in.ClaimID != "" {
+			claimID, err = uuid.Parse(in.ClaimID)
+			if err != nil {
+				return supportedByEdgesOutput{}, fmt.Errorf("parse claim id: %w", err)
+			}
+		}
+		if in.SourceID != "" {
+			sourceID, err = uuid.Parse(in.SourceID)
+			if err != nil {
+				return supportedByEdgesOutput{}, fmt.Errorf("parse source id: %w", err)
+			}
+		}
+		out, err := knowledge.ListSupportedBy(ctx, claimID, sourceID)
+		if err != nil {
+			return supportedByEdgesOutput{}, err
+		}
+		edges, err := objects(out)
+		return supportedByEdgesOutput{Edges: edges}, err
 	})
 }

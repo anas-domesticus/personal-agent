@@ -119,6 +119,20 @@ type KnowledgeNodeMatch struct {
 	Score float64 `json:"score"`
 }
 
+// KnowledgeEdge is one predefined graph relationship.
+type KnowledgeEdge struct {
+	ID         uuid.UUID       `json:"id"`
+	Kind       string          `json:"kind"`
+	SourceID   uuid.UUID       `json:"source_id"`
+	SourceKind string          `json:"source_kind"`
+	TargetID   uuid.UUID       `json:"target_id"`
+	TargetKind string          `json:"target_kind"`
+	Data       json.RawMessage `json:"data"`
+	Revision   int64           `json:"revision"`
+	CreatedAt  time.Time       `json:"created_at"`
+	UpdatedAt  time.Time       `json:"updated_at"`
+}
+
 // --- Runs ---------------------------------------------------------------------
 
 type RunStatus string

@@ -22,6 +22,12 @@ const (
 	AgentKind     = "agent"
 )
 
+// SupportedByKind identifies a claim-to-source support relationship.
+const SupportedByKind = "supported_by"
+
+// SupportedBy is the empty payload of a claim-to-source support relationship.
+type SupportedBy struct{}
+
 // Details contains the common descriptive fields for knowledge nodes.
 type Details struct {
 	Title       string `json:"title"`

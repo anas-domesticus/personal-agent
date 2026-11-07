@@ -49,6 +49,9 @@ type Runs interface {
 type Knowledge interface {
 	Upsert(ctx context.Context, kind string, id uuid.UUID, data json.RawMessage, expectedRevision *int64) (domain.KnowledgeNode, error)
 	Search(ctx context.Context, kind, query string, limit int32) ([]domain.KnowledgeNodeMatch, error)
+	AddSupportedBy(ctx context.Context, claimID, sourceID uuid.UUID) (domain.KnowledgeEdge, error)
+	DeleteSupportedBy(ctx context.Context, edgeID uuid.UUID) error
+	ListSupportedBy(ctx context.Context, claimID, sourceID uuid.UUID) ([]domain.KnowledgeEdge, error)
 }
 
 type Tools interface {

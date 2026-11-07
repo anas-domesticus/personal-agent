@@ -2,7 +2,7 @@
 
 A Postgres-backed knowledge and capability service that complements a personal agent.
 
-**Today, the implemented product is an orchestration and knowledge-graph MCP server, not a conversational assistant or question-answering interface.** Its 21 MCP tools manage agent definitions, DAG workflows, durable background runs and predefined knowledge nodes. The graph stores versioned objectives, workflows, claims, sources and agents, embeds every node's title and description, and supports semantic node search.
+**Today, the implemented product is an orchestration and knowledge-graph MCP server, not a conversational assistant or question-answering interface.** Its 24 MCP tools manage agent definitions, DAG workflows, durable background runs and predefined knowledge nodes and relationships. The graph stores versioned objectives, workflows, claims, sources and agents, links claims to supporting sources, embeds every node's title and description, and supports semantic node search.
 
 ## Product boundary and direction
 
@@ -12,10 +12,10 @@ That is the target boundary, not a claim that every capability exists today. The
 
 ## What it does now
 
-- Exposes 21 agent, workflow, run and knowledge-node operations through typed MCP tools.
+- Exposes 24 agent, workflow, run and knowledge operations through typed MCP tools.
 - Runs agentic DAG workflows in the background with River and records every step in Postgres.
 - Stores immutable agent and workflow versions, including promotion and rollback.
-- Registers versioned objective, workflow, claim, source and agent types in the Postgres graph. The graph module also supports constrained edges, rollback and externally defined enrichment handlers; the base schema registers no relationships or handlers.
+- Registers versioned objective, workflow, claim, source and agent types plus the `supported_by` claim-to-source relationship in the Postgres graph. The graph module also supports constrained edges, rollback and externally defined enrichment handlers; the base schema registers no handlers.
 - Queues separate title and description embeddings whenever a knowledge node changes and searches current nodes by semantic similarity.
 - Searches workflows by meaning and keywords with pgvector.
 - Gives workflow agents configurable file, shell, web, clock, knowledge-node and external MCP tools.
@@ -43,7 +43,7 @@ The endpoint is `http://127.0.0.1:7433/mcp`, using stateless Streamable HTTP. Co
 - **Workflows:** list, search, get, list versions, create, append versions, promote or roll back versions, update descriptions and delete.
 - **Runs:** start a workflow, optionally wait briefly, list recent runs and inspect durable node results.
 
-- **Knowledge nodes:** create or update any predefined objective, workflow, claim, source or agent with `upsert_knowledge_node`; search current nodes by title or description meaning with `search_knowledge_nodes`.
+- **Knowledge graph:** create or update any predefined objective, workflow, claim, source or agent with `upsert_knowledge_node`; search current nodes by title or description meaning with `search_knowledge_nodes`. Add, list and delete claim-to-source support with `add_supported_by`, `list_supported_by` and `delete_supported_by`; listing selects exactly one claim or source.
 
 Ask a Question is not implemented.
 

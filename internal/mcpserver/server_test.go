@@ -25,7 +25,7 @@ func TestServer(t *testing.T) {
 
 	listed, err := session.ListTools(context.Background(), nil)
 	require.NoError(t, err)
-	assert.Len(t, listed.Tools, 21)
+	assert.Len(t, listed.Tools, 24)
 	for _, tool := range listed.Tools {
 		assert.NotNil(t, tool.InputSchema, tool.Name)
 		assert.NotNil(t, tool.OutputSchema, tool.Name)

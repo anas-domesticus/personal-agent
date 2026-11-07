@@ -10,7 +10,7 @@ The current implementation stores and semantically searches structured knowledge
 
 ## Current implementation
 
-All statements below describe current code. The graph database schema and `internal/graph` Go module are wired into `internal/app`, which registers versioned objective, workflow, claim, source and agent types and runs the graph-enrichment worker. MCP exposes node upsert and semantic search; no relationship kinds are registered by the base schema.
+All statements below describe current code. The graph database schema and `internal/graph` Go module are wired into `internal/app`, which registers versioned objective, workflow, claim, source and agent types, one claim-to-source `supported_by` relationship, and runs the graph-enrichment worker. MCP exposes node upsert and semantic search plus support-relationship add, list and delete.
 
 ## Technology
 
@@ -43,7 +43,7 @@ graph_edge_types ──< graph_edge_type_endpoints
 
 ## Knowledge graph
 
-`internal/graph` is a reusable typed graph module wired into `internal/app`. The application registers five versioned knowledge types from `internal/knowledge`: objectives describe desired outcomes, workflows hold executable DAGs, claims hold statements of knowledge, sources hold provenance, and agents hold prompt/model/tool definitions. Every node data type embeds common details or otherwise implements `graph.TextData`, exposing matching `title` and `description` JSON fields. The graph-enrichment worker runs with the application. MCP exposes generic upsert and semantic search across these predefined kinds. There are no base relationship kinds and Ask a Question is not implemented.
+`internal/graph` is a reusable typed graph module wired into `internal/app`. The application registers five versioned knowledge types from `internal/knowledge`: objectives describe desired outcomes, workflows hold executable DAGs, claims hold statements of knowledge, sources hold provenance, and agents hold prompt/model/tool definitions. Every node data type embeds common details or otherwise implements `graph.TextData`, exposing matching `title` and `description` JSON fields. The graph-enrichment worker runs with the application. MCP exposes generic upsert and semantic search across these predefined kinds. The only base relationship kind is `supported_by`, whose sole permitted endpoint is claim to source and whose payload is an empty JSON object. Repeated upserts of the same claim/source pair return the existing edge without incrementing its revision. Listing requires exactly one claim or source selector and preserves repository creation order; deletion selects an edge ID. Ask a Question is not implemented.
 
 `graph.New` requires a store and a non-nil `JobInserter` for writes: a changed write or rollback fails rather than committing without its enrichment job. Generic registration functions return node and edge repositories for application-defined Go types. Registration persists a JSON Schema in `graph_node_types` or `graph_edge_types`, verifies that a later process registering the same kind matches the stored definition, and rejects a repeated kind in the same registry even when it matches. Node versioned-ness is fixed at registration and persisted with the type; a later registration cannot change it. Edge registration also verifies the complete endpoint set. `RegisterRiver` freezes registration and installs the shared worker and its `graph_enrichment` queue.
 
@@ -79,7 +79,7 @@ MCP client ══ Streamable HTTP ══> mcpserver ──> catalog, runs (consu
 | `internal/store/db` | sqlc-generated queries, never hand-edited |
 | `internal/catalog` | Agents and workflows: validation, versioning, deletion and search |
 | `internal/graph` | Typed graph registry, node and edge persistence, immutable history, rollback, enrichment and semantic search |
-| `internal/knowledge` | First-class objective, workflow, claim, source and agent domain types and validation |
+| `internal/knowledge` | First-class objective, workflow, claim, source and agent types, the supported-by relationship and validation |
 | `internal/agent` | Builds runnable Eino agents from versions and provides subagents |
 | `internal/chat` | Conversation and message storage used by subagents |
 | `internal/runs` | Workflow runs: service, River worker and reaper |
@@ -101,12 +101,13 @@ MCP client ══ Streamable HTTP ══> mcpserver ──> catalog, runs (consu
 
 ## MCP API
 
-`internal/mcpserver` registers 21 tools with typed input and output schemas. The SDK validates arguments, returns `structuredContent` plus JSON text compatibility content, and turns handler errors into tool execution errors. Read-only, additive and idempotent operations carry annotations; every tool is marked closed-world. MCP workflow-search, knowledge-search and run-list limits default to 10 and are capped at 100; these are separate from the graph history defaults of 50 and 100 described above.
+`internal/mcpserver` registers 24 tools with typed input and output schemas. The SDK validates arguments, returns `structuredContent` plus JSON text compatibility content, and turns handler errors into tool execution errors. Read-only, additive and idempotent operations carry annotations; every tool is marked closed-world. MCP workflow-search, knowledge-search and run-list limits default to 10 and are capped at 100; these are separate from the graph history defaults of 50 and 100 described above.
 
 - **Agents:** `list_agents`, `get_agent`, `list_agent_versions` (immutable versions, newest first), `create_agent`, `add_agent_version`, `set_agent_version`, and `list_tools` (tools and settings available to workflow-agent definitions).
 - **Workflows:** `list_workflows`, `search_workflows`, `get_workflow`, `list_workflow_versions`, `create_workflow`, `add_workflow_version`, `set_workflow_version`, `update_workflow_description`, `delete_workflow`.
 - **Runs:** `run_workflow`, `get_run`, `list_runs`.
 - **Knowledge nodes:** `upsert_knowledge_node`, `search_knowledge_nodes`. Upsert accepts a predefined kind and raw data object, with an optional existing id and expected revision. Semantic search optionally restricts one kind and ranks current nodes by their closer title or description vector.
+- **Knowledge relationships:** `add_supported_by`, `delete_supported_by`, `list_supported_by`. Add parses claim and source UUIDs and idempotently connects that pair. List parses exactly one optional `claim_id` or `source_id` selector and returns complete edges, including raw JSON data, in repository creation order. Delete parses `edge_id` and returns an empty structured object.
 
 `get_workflow` optionally selects a version instead of the current one. `run_workflow` starts the current version asynchronously and returns a run id; `wait_seconds` optionally polls for up to five minutes. `get_run` omits transcripts by default and can include them for debugging. Workflow deletion never removes recorded runs.
 
