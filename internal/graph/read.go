@@ -2,7 +2,6 @@ package graph
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 
 	"github.com/google/uuid"
@@ -21,28 +20,13 @@ func (g *Graph) GetNode(ctx context.Context, kind string, id uuid.UUID) (domain.
 	if !g.hasNodeKind(kind) {
 		return domain.KnowledgeNode{}, fmt.Errorf("graph node kind %q: %w", kind, domain.ErrNotFound)
 	}
-	row, err := g.store.GetGraphNode(ctx, db.GetGraphNodeParams{ID: id, Kind: kind})
+	row, err := g.store.GetGraphNodeCurrent(ctx, db.GetGraphNodeCurrentParams{ID: id, Kind: kind})
 	if err != nil {
 		return domain.KnowledgeNode{}, graphError(err, "graph node")
 	}
-	raw := row.Data
-	if row.Versioned {
-		version, err := g.store.GetGraphNodeVersion(ctx, db.GetGraphNodeVersionParams{NodeID: row.ID, Version: *row.CurrentVersion})
-		if err != nil {
-			return domain.KnowledgeNode{}, graphError(err, "current graph node version")
-		}
-		raw = version.Data
-	}
-	var text struct {
-		Title       string `json:"title"`
-		Description string `json:"description"`
-	}
-	if err := json.Unmarshal(raw, &text); err != nil {
-		return domain.KnowledgeNode{}, fmt.Errorf("decode graph node text: %w", err)
-	}
 	return domain.KnowledgeNode{
 		ID: row.ID, Kind: row.Kind, Revision: row.Revision,
-		Title: text.Title, Description: text.Description, Data: raw,
+		Title: row.Title, Description: row.Description, Data: row.Data,
 		CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt,
 	}, nil
 }

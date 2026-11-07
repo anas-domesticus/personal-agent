@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 
 	"github.com/cloudwego/eino/components/embedding"
@@ -105,10 +106,13 @@ func (k *Knowledge) AddSupportedBy(ctx context.Context, claimID, sourceID uuid.U
 		graph.Ref{ID: sourceID, Kind: knowledge.SourceKind},
 		knowledge.SupportedBy{}, graph.WriteOptions{},
 	)
+	if errors.Is(err, domain.ErrExists) {
+		edge, err = k.SupportedBy.Between(ctx, claimID, sourceID)
+	}
 	if err != nil {
 		return domain.KnowledgeEdge{}, err
 	}
-	return knowledgeEdge(edge)
+	return supportedByEdge(edge)
 }
 
 // DeleteSupportedBy removes a support relationship by edge ID.
@@ -135,7 +139,7 @@ func (k *Knowledge) ListSupportedBy(ctx context.Context, claimID, sourceID uuid.
 	}
 	out := make([]domain.KnowledgeEdge, len(edges))
 	for i, edge := range edges {
-		out[i], err = knowledgeEdge(edge)
+		out[i], err = supportedByEdge(edge)
 		if err != nil {
 			return nil, err
 		}
@@ -143,7 +147,7 @@ func (k *Knowledge) ListSupportedBy(ctx context.Context, claimID, sourceID uuid.
 	return out, nil
 }
 
-func knowledgeEdge[T any](edge graph.Edge[T]) (domain.KnowledgeEdge, error) {
+func supportedByEdge(edge graph.Edge[knowledge.SupportedBy]) (domain.KnowledgeEdge, error) {
 	data, err := json.Marshal(edge.Data)
 	if err != nil {
 		return domain.KnowledgeEdge{}, fmt.Errorf("encode graph edge data: %w", err)

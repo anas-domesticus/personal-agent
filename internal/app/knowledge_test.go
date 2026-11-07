@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"os"
+	"sync"
 	"testing"
 	"time"
 
@@ -202,6 +203,48 @@ func TestSupportedByRelationships(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, []domain.KnowledgeEdge{second}, fromClaim)
 	assert.ErrorIs(t, a.Knowledge.DeleteSupportedBy(ctx, first.ID), domain.ErrNotFound)
+}
+
+func TestConcurrentSupportedByCreation(t *testing.T) {
+	t.Parallel()
+	st, _ := testdb.Open(t)
+	a, err := app.New(context.Background(), config.Config{MCP: config.MCP{}, WorkspaceDir: t.TempDir()}, app.Options{Store: st})
+	require.NoError(t, err)
+	t.Cleanup(func() { a.Close(context.Background()) })
+	ctx := context.Background()
+
+	claim, err := a.Knowledge.Claims.Upsert(ctx, uuid.Nil, knowledge.Claim{
+		Details: knowledge.Details{Title: "Concurrent support", Description: "A test claim"},
+	}, graph.NodeWriteOptions{})
+	require.NoError(t, err)
+	source, err := a.Knowledge.Sources.Upsert(ctx, uuid.Nil, knowledge.Source{
+		Details: knowledge.Details{Title: "Source", Description: "Supporting material"},
+	}, graph.NodeWriteOptions{})
+	require.NoError(t, err)
+
+	const callers = 8
+	type result struct {
+		edge domain.KnowledgeEdge
+		err  error
+	}
+	results := make([]result, callers)
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	for i := range results {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			results[i].edge, results[i].err = a.Knowledge.AddSupportedBy(ctx, claim.ID, source.ID)
+		}()
+	}
+	close(start)
+	wg.Wait()
+
+	for _, result := range results {
+		require.NoError(t, result.err)
+		assert.Equal(t, results[0].edge, result.edge)
+	}
 }
 
 func TestKnowledgeMigrationPreservesExistingNodes(t *testing.T) {

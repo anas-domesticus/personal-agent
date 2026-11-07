@@ -41,6 +41,15 @@ select *
 from graph_nodes
 where id = $1 and kind = $2;
 
+-- name: GetGraphNodeCurrent :one
+select n.id, n.kind, n.revision, coalesce(v.data, n.data) as data,
+       cast(coalesce(v.data, n.data)->>'title' as text) as title,
+       cast(coalesce(v.data, n.data)->>'description' as text) as description,
+       n.created_at, n.updated_at
+from graph_nodes n
+left join graph_node_versions v on v.node_id = n.id and v.version = n.current_version
+where n.id = $1 and n.kind = $2;
+
 -- name: GetGraphNodeForUpdate :one
 select *
 from graph_nodes

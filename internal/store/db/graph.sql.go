@@ -189,6 +189,48 @@ func (q *Queries) GetGraphNode(ctx context.Context, arg GetGraphNodeParams) (Gra
 	return i, err
 }
 
+const getGraphNodeCurrent = `-- name: GetGraphNodeCurrent :one
+select n.id, n.kind, n.revision, coalesce(v.data, n.data) as data,
+       cast(coalesce(v.data, n.data)->>'title' as text) as title,
+       cast(coalesce(v.data, n.data)->>'description' as text) as description,
+       n.created_at, n.updated_at
+from graph_nodes n
+left join graph_node_versions v on v.node_id = n.id and v.version = n.current_version
+where n.id = $1 and n.kind = $2
+`
+
+type GetGraphNodeCurrentParams struct {
+	ID   uuid.UUID `json:"id"`
+	Kind string    `json:"kind"`
+}
+
+type GetGraphNodeCurrentRow struct {
+	ID          uuid.UUID       `json:"id"`
+	Kind        string          `json:"kind"`
+	Revision    int64           `json:"revision"`
+	Data        json.RawMessage `json:"data"`
+	Title       string          `json:"title"`
+	Description string          `json:"description"`
+	CreatedAt   time.Time       `json:"created_at"`
+	UpdatedAt   time.Time       `json:"updated_at"`
+}
+
+func (q *Queries) GetGraphNodeCurrent(ctx context.Context, arg GetGraphNodeCurrentParams) (GetGraphNodeCurrentRow, error) {
+	row := q.db.QueryRow(ctx, getGraphNodeCurrent, arg.ID, arg.Kind)
+	var i GetGraphNodeCurrentRow
+	err := row.Scan(
+		&i.ID,
+		&i.Kind,
+		&i.Revision,
+		&i.Data,
+		&i.Title,
+		&i.Description,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const getGraphNodeEmbeddingText = `-- name: GetGraphNodeEmbeddingText :one
 select n.id, n.kind, n.revision,
        cast(coalesce(v.data, n.data)->>'title' as text) as title,
