@@ -26,11 +26,19 @@ func TestServer(t *testing.T) {
 	listed, err := session.ListTools(context.Background(), nil)
 	require.NoError(t, err)
 	assert.Len(t, listed.Tools, 26)
+	var addSupportedBy *mcp.Tool
 	for _, tool := range listed.Tools {
 		assert.NotNil(t, tool.InputSchema, tool.Name)
 		assert.NotNil(t, tool.OutputSchema, tool.Name)
 		assert.False(t, *tool.Annotations.OpenWorldHint, tool.Name)
+		if tool.Name == "add_supported_by" {
+			addSupportedBy = tool
+		}
 	}
+	require.NotNil(t, addSupportedBy)
+	assert.True(t, addSupportedBy.Annotations.IdempotentHint)
+	require.NotNil(t, addSupportedBy.Annotations.DestructiveHint)
+	assert.False(t, *addSupportedBy.Annotations.DestructiveHint)
 
 	graph := workflow.Graph{Nodes: []workflow.Node{{ID: "only", Agent: "worker"}}, Edges: []workflow.Edge{}}
 	workflows.EXPECT().Create(mock.Anything, "daily", "Daily work", graph, "first").

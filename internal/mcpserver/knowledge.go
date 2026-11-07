@@ -87,6 +87,9 @@ func registerKnowledgeTools(s *mcp.Server, knowledge Knowledge) {
 			if err != nil {
 				return nil, fmt.Errorf("parse knowledge node id: %w", err)
 			}
+			if id == uuid.Nil {
+				return nil, fmt.Errorf("knowledge node id must not be zero")
+			}
 		} else if in.ExpectedRevision != nil {
 			return nil, fmt.Errorf("new knowledge node has an expected revision: %w", domain.ErrConflict)
 		}
@@ -104,7 +107,7 @@ func registerKnowledgeTools(s *mcp.Server, knowledge Knowledge) {
 		nodes, err := objects(out)
 		return knowledgeNodeMatchesOutput{Nodes: nodes}, err
 	})
-	add(s, "add_supported_by", "Create or return the relationship showing that a source supports a claim.", closedID, func(ctx context.Context, in addSupportedByInput) (map[string]any, error) {
+	add(s, "add_supported_by", "Create or return the relationship showing that a source supports a claim.", idempotent, func(ctx context.Context, in addSupportedByInput) (map[string]any, error) {
 		claimID, err := uuid.Parse(in.ClaimID)
 		if err != nil {
 			return nil, fmt.Errorf("parse claim id: %w", err)

@@ -87,6 +87,11 @@ func TestUpsertKnowledgeNode(t *testing.T) {
 			wantErr: "parse knowledge node id",
 		},
 		{
+			name:    "zero UUID",
+			args:    map[string]any{"kind": "objective", "id": uuid.Nil.String(), "data": map[string]any{}},
+			wantErr: "knowledge node id must not be zero",
+		},
+		{
 			name:    "new node with expected revision",
 			args:    map[string]any{"kind": "objective", "expected_revision": revision, "data": map[string]any{}},
 			wantErr: "new knowledge node has an expected revision: conflict",

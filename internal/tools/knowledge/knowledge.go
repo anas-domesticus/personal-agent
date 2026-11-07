@@ -60,6 +60,9 @@ func upsert(ctx context.Context, store Store, in upsertInput) (domain.KnowledgeN
 		if err != nil {
 			return domain.KnowledgeNode{}, fmt.Errorf("parse knowledge node id: %w", err)
 		}
+		if id == uuid.Nil {
+			return domain.KnowledgeNode{}, fmt.Errorf("knowledge node id must not be zero")
+		}
 	} else if in.ExpectedRevision != nil {
 		return domain.KnowledgeNode{}, fmt.Errorf("new knowledge node has an expected revision: %w", domain.ErrConflict)
 	}

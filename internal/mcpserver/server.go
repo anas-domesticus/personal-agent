@@ -89,10 +89,11 @@ func add[In, Out any](s *mcp.Server, name, description string, annotations *mcp.
 }
 
 var (
-	readOnly = &mcp.ToolAnnotations{ReadOnlyHint: true, OpenWorldHint: boolPtr(false)}
-	additive = &mcp.ToolAnnotations{DestructiveHint: boolPtr(false), OpenWorldHint: boolPtr(false)}
-	writing  = &mcp.ToolAnnotations{OpenWorldHint: boolPtr(false)}
-	closedID = &mcp.ToolAnnotations{IdempotentHint: true, OpenWorldHint: boolPtr(false)}
+	readOnly   = &mcp.ToolAnnotations{ReadOnlyHint: true, OpenWorldHint: boolPtr(false)}
+	additive   = &mcp.ToolAnnotations{DestructiveHint: boolPtr(false), OpenWorldHint: boolPtr(false)}
+	writing    = &mcp.ToolAnnotations{OpenWorldHint: boolPtr(false)}
+	closedID   = &mcp.ToolAnnotations{IdempotentHint: true, OpenWorldHint: boolPtr(false)}
+	idempotent = &mcp.ToolAnnotations{IdempotentHint: true, DestructiveHint: boolPtr(false), OpenWorldHint: boolPtr(false)}
 )
 
 func boolPtr(v bool) *bool { return &v }

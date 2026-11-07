@@ -99,6 +99,12 @@ func TestKnowledgeTools(t *testing.T) {
 	})
 	require.NoError(t, err)
 	assert.True(t, invalid.IsError)
+
+	zeroID, err := session.CallTool(context.Background(), &mcp.CallToolParams{
+		Name: "upsert_knowledge_node", Arguments: map[string]any{"kind": "objective", "id": uuid.Nil.String(), "data": map[string]any{}},
+	})
+	require.NoError(t, err)
+	assert.True(t, zeroID.IsError)
 }
 
 func TestSupportedByTools(t *testing.T) {
