@@ -124,7 +124,7 @@ tasks:
       - golangci-lint run ./...
 
   test:
-    desc: Run unit and database tests (needs Docker for testcontainers)
+    desc: Run unit, database and whole-stack integration tests (needs Docker)
     deps: [sqlc]
     cmds:
       - go test -race ./... {{.CLI_ARGS}}

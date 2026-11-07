@@ -1,13 +1,19 @@
 # personal-agent
 
-A Postgres-backed orchestration server for agentic work. It is an MCP server, not a conversational assistant: connect any MCP-capable client to manage agent definitions and DAG workflows, start durable background runs and inspect results.
+A Postgres-backed knowledge base in the making, with agents supporting the work of collecting, organising and using knowledge.
 
-## What it does
+**Today, the implemented product is an orchestration MCP server, not a conversational assistant or question-answering interface.** Its 19 MCP tools manage agent definitions, DAG workflows and durable background runs. The application also registers an internal knowledge graph with versioned objectives, workflows, claims, sources and agents, but does not expose graph operations through MCP.
 
-- Exposes agent, workflow and run management through typed MCP tools.
+## Direction
+
+The long-term centre of the product is a durable, queryable knowledge base in Postgres. Agents will help curate and use that knowledge, including an **Ask a Question** experience grounded in what is stored. Ask a Question and public knowledge-base APIs are future direction, not current behaviour. The former memory feature has been removed.
+
+## What it does now
+
+- Exposes 19 agent, workflow and run management operations through typed MCP tools.
 - Runs agentic DAG workflows in the background with River and records every step in Postgres.
 - Stores immutable agent and workflow versions, including promotion and rollback.
-- Provides a generic Postgres graph module with typed nodes, constrained edges, immutable history, rollback and externally defined enrichment handlers.
+- Registers versioned objective, workflow, claim, source and agent types in the internal Postgres graph. The graph module also supports constrained edges, rollback and externally defined enrichment handlers; the base schema registers no relationships or handlers.
 - Searches workflows by meaning and keywords with pgvector.
 - Gives workflow agents configurable file, shell, web, clock and external MCP tools.
 
@@ -15,7 +21,7 @@ The server has no authentication and only accepts loopback listen addresses. Do 
 
 ## Running it
 
-Requires Go, Docker and [Task](https://taskfile.dev).
+Requires Go, Docker with Docker Compose, and [Task](https://taskfile.dev).
 
 ```sh
 cp .env.example .env   # add OPENROUTER_API_KEY
@@ -30,9 +36,11 @@ The endpoint is `http://127.0.0.1:7433/mcp`, using stateless Streamable HTTP. Co
 
 ## MCP tools
 
-- **Agents:** list, search configuration tools, get, create, append immutable versions and promote versions.
-- **Workflows:** list, search, get, list versions, create, append versions, promote versions, update descriptions and delete.
+- **Agents:** list and inspect agents, list their immutable versions newest first, create agents, append versions and promote or roll back versions. `list_tools` lists tools and configuration available to workflow-agent definitions.
+- **Workflows:** list, search, get, list versions, create, append versions, promote or roll back versions, update descriptions and delete.
 - **Runs:** start a workflow, optionally wait briefly, list recent runs and inspect durable node results.
+
+These are management tools: there is currently no MCP tool for storing or querying knowledge-graph entities and no Ask a Question operation.
 
 Deleting a workflow with recorded runs returns a conflict rather than destroying execution history.
 

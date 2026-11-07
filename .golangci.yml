@@ -47,7 +47,7 @@ linters:
             - {pkg: github.com/anas-domesticus/personal-agent/internal/embed, desc: tools reach services through interfaces they declare}
             - {pkg: github.com/anas-domesticus/personal-agent/internal/store, desc: tools reach services through interfaces they declare}
         leaves:
-          files: ["**/internal/domain/**", "**/internal/workflow/**", "**/internal/tools/kit/**", "**/internal/config/**", "**/internal/llm/**", "**/internal/search/**", "**/internal/workspace/**"]
+          files: ["**/internal/domain/**", "**/internal/workflow/**", "**/internal/knowledge/**", "**/internal/tools/kit/**", "**/internal/config/**", "**/internal/llm/**", "**/internal/search/**", "**/internal/workspace/**"]
           deny:
             - {pkg: github.com/anas-domesticus/personal-agent/internal/agent, desc: foundation packages depend on nothing above them}
             - {pkg: github.com/anas-domesticus/personal-agent/internal/embed, desc: foundation packages depend on nothing above them}

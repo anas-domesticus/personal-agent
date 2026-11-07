@@ -1,8 +1,8 @@
 // Package app wires the orchestration system together. The MCP binary and
 // integration tests build an App rather than repeating the wiring.
 //
-// Construction creates the stores and model clients, then agent definitions,
-// workflows and runs, and finally the workers that execute them.
+// Construction creates the store and model clients, registers the base
+// knowledge schema, then builds agent definitions, workflows, runs and workers.
 package app
 
 import (
@@ -23,6 +23,7 @@ import (
 	"github.com/anas-domesticus/personal-agent/internal/chat"
 	"github.com/anas-domesticus/personal-agent/internal/config"
 	"github.com/anas-domesticus/personal-agent/internal/embed"
+	"github.com/anas-domesticus/personal-agent/internal/graph"
 	"github.com/anas-domesticus/personal-agent/internal/llm"
 	"github.com/anas-domesticus/personal-agent/internal/runs"
 	"github.com/anas-domesticus/personal-agent/internal/search"
@@ -66,6 +67,8 @@ type App struct {
 	Runs      *runs.Service
 	Tools     *tools.Toolset
 	Builder   *agent.Builder
+	Graph     *graph.Graph
+	Knowledge Knowledge
 
 	// Jobs queues jobs; it never works them.
 	Jobs *river.Client[pgx.Tx]
@@ -95,6 +98,10 @@ func New(ctx context.Context, cfg config.Config, opts Options) (_ *App, err erro
 	}
 	if a.Jobs, err = river.NewClient(riverpgxv5.New(a.Store.Pool), &river.Config{Logger: slog.Default()}); err != nil {
 		return nil, fmt.Errorf("river client: %w", err)
+	}
+	a.Graph = graph.New(a.Store, a.Jobs)
+	if a.Knowledge, err = registerKnowledge(ctx, a.Graph); err != nil {
+		return nil, err
 	}
 
 	llmCfg := llm.Config{APIKey: cfg.OpenRouterAPIKey}
@@ -160,10 +167,11 @@ func New(ctx context.Context, cfg config.Config, opts Options) (_ *App, err erro
 	conversations := chat.NewPGStore(a.Store)
 	a.Builder = &agent.Builder{Agents: a.Agents, Tools: a.Tools, Models: models, Catalog: modelCatalog, Subagents: conversations}
 
-	// Each queue is worked only where it can be: runs need models, and
-	// embeddings need an embedder. Jobs for an unworked queue wait for a
-	// process that can work it.
+	// Graph enrichment always runs. Other queues are worked only where they
+	// can be: runs need models, and embeddings need an embedder. Jobs for an
+	// unworked queue wait for a process that can work it.
 	rc := &river.Config{Logger: slog.Default()}
+	graph.RegisterRiver(rc, a.Graph)
 	if embedder != nil {
 		embed.Register(rc, a.Store.Queries, embedder, cfg.EmbeddingModel)
 	}
@@ -205,7 +213,9 @@ func (a *App) Close(ctx context.Context) {
 		}
 	}
 	a.cancel()
-	a.MCP.Close()
+	if a.MCP != nil {
+		a.MCP.Close()
+	}
 	if a.ownsDB && a.Store != nil {
 		a.Store.Close()
 	}

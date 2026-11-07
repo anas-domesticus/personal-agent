@@ -30,6 +30,20 @@ Checklists for the common changes. Each ends with `task check`. Conventions are 
 5. **Update the docs:** the data model in `docs/architecture.md`, and `domain` types if callers need them.
 6. Run `task check`.
 
+## Register graph types
+
+The application registers the five versioned base knowledge types during construction. Use this recipe when changing those registrations or adding application-specific types; it does not create an MCP knowledge API.
+
+1. **Choose persistence:** use `RegisterNode[T]` for current-state-only nodes or `RegisterVersionedNode[T]` for immutable snapshots, history and rollback. Versioned-ness is fixed by the persisted registration and cannot be changed later.
+2. **Define the kind and data:** use a stable kind and a Go type whose reflected JSON Schema describes its data. Add optional domain validation and idempotent enrichment handlers in the spec. Types without handlers still enqueue acknowledged no-op jobs.
+3. **Construct with dependencies:** call `graph.New(store, jobs)` with a non-nil River `JobInserter`. Changed writes require transactional enrichment insertion and fail if the inserter is nil.
+4. **Register node kinds before edge kinds, then freeze:** register every node and edge exactly once in each process, including the edge's complete permitted endpoint set. Finish with `graph.RegisterRiver(config, graph)` to freeze registration and install the shared worker and `graph_enrichment` queue. Repeating a kind in one registry is an error; a later process must reproduce the persisted schema, node versioned-ness and edge endpoint set exactly.
+   - Registration does not migrate type definitions or snapshots. Put any `data_schema` change and corresponding current/historical JSON transformation in a new migration; do not rely on registering a changed Go type to rewrite data.
+5. **Use write and history semantics deliberately:** pass `ExpectedRevision` only for optimistic concurrency on existing entities. Treat `Before` as exclusive when paging version history, and pass back `NextBefore`.
+6. **Test against Postgres** with `testdb.Open(t)`. Cover schema mismatch, fixed versioned-ness, repeated registration, endpoint constraints, no-op writes, revision conflicts, exclusive history cursors, enrichment insertion and stale jobs. Assert `errors.Is` for `ErrNotFound`, `ErrExists` and `ErrConflict` where applicable.
+7. **Update the graph section and package map** in `docs/architecture.md`. Keep internal infrastructure clearly distinct from user-facing knowledge-base direction.
+8. Run `task check`.
+
 ## Add a service, or a dependency between packages
 
 1. **Declare the interface in the consumer:** only the methods it calls, with a doc comment naming the implementation.
