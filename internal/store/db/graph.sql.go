@@ -645,6 +645,64 @@ func (q *Queries) ListGraphNodeVersions(ctx context.Context, arg ListGraphNodeVe
 	return items, nil
 }
 
+const listGraphNodes = `-- name: ListGraphNodes :many
+select n.id, n.kind, n.revision, coalesce(v.data, n.data) as data,
+       cast(coalesce(v.data, n.data)->>'title' as text) as title,
+       cast(coalesce(v.data, n.data)->>'description' as text) as description,
+       n.created_at, n.updated_at
+from graph_nodes n
+left join graph_node_versions v on v.node_id = n.id and v.version = n.current_version
+where ($1::bool or n.kind = $2::text)
+order by n.created_at, n.id
+limit $3::int
+`
+
+type ListGraphNodesParams struct {
+	AllKinds bool   `json:"all_kinds"`
+	Kind     string `json:"kind"`
+	Lim      int32  `json:"lim"`
+}
+
+type ListGraphNodesRow struct {
+	ID          uuid.UUID       `json:"id"`
+	Kind        string          `json:"kind"`
+	Revision    int64           `json:"revision"`
+	Data        json.RawMessage `json:"data"`
+	Title       string          `json:"title"`
+	Description string          `json:"description"`
+	CreatedAt   time.Time       `json:"created_at"`
+	UpdatedAt   time.Time       `json:"updated_at"`
+}
+
+func (q *Queries) ListGraphNodes(ctx context.Context, arg ListGraphNodesParams) ([]ListGraphNodesRow, error) {
+	rows, err := q.db.Query(ctx, listGraphNodes, arg.AllKinds, arg.Kind, arg.Lim)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListGraphNodesRow{}
+	for rows.Next() {
+		var i ListGraphNodesRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Kind,
+			&i.Revision,
+			&i.Data,
+			&i.Title,
+			&i.Description,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listGraphNodesMissingEmbeddings = `-- name: ListGraphNodesMissingEmbeddings :many
 select id, kind as node_kind, revision
 from graph_nodes

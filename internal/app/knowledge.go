@@ -69,6 +69,16 @@ func registerKnowledge(ctx context.Context, g *graph.Graph, embedder embedding.E
 	return out, nil
 }
 
+// Get returns a predefined node's current raw data.
+func (k *Knowledge) Get(ctx context.Context, kind string, id uuid.UUID) (domain.KnowledgeNode, error) {
+	return k.graph.GetNode(ctx, kind, id)
+}
+
+// List returns current raw node data, optionally restricted to one kind.
+func (k *Knowledge) List(ctx context.Context, kind string, limit int32) ([]domain.KnowledgeNode, error) {
+	return k.graph.ListNodes(ctx, kind, limit)
+}
+
 // Upsert writes a predefined node through its registered typed repository.
 func (k *Knowledge) Upsert(ctx context.Context, kind string, id uuid.UUID, data json.RawMessage, expectedRevision *int64) (domain.KnowledgeNode, error) {
 	return k.graph.UpsertNode(ctx, kind, id, data, graph.NodeWriteOptions{

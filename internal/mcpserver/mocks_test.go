@@ -1580,6 +1580,152 @@ func (_c *MockKnowledge_DeleteSupportedBy_Call) RunAndReturn(run func(ctx contex
 	return _c
 }
 
+// Get provides a mock function for the type MockKnowledge
+func (_mock *MockKnowledge) Get(ctx context.Context, kind string, id uuid.UUID) (domain.KnowledgeNode, error) {
+	ret := _mock.Called(ctx, kind, id)
+
+	if len(ret) == 0 {
+		panic("no return value specified for Get")
+	}
+
+	var r0 domain.KnowledgeNode
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string, uuid.UUID) (domain.KnowledgeNode, error)); ok {
+		return returnFunc(ctx, kind, id)
+	}
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string, uuid.UUID) domain.KnowledgeNode); ok {
+		r0 = returnFunc(ctx, kind, id)
+	} else {
+		r0 = ret.Get(0).(domain.KnowledgeNode)
+	}
+	if returnFunc, ok := ret.Get(1).(func(context.Context, string, uuid.UUID) error); ok {
+		r1 = returnFunc(ctx, kind, id)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockKnowledge_Get_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'Get'
+type MockKnowledge_Get_Call struct {
+	*mock.Call
+}
+
+// Get is a helper method to define mock.On call
+//   - ctx context.Context
+//   - kind string
+//   - id uuid.UUID
+func (_e *MockKnowledge_Expecter) Get(ctx any, kind any, id any) *MockKnowledge_Get_Call {
+	return &MockKnowledge_Get_Call{Call: _e.mock.On("Get", ctx, kind, id)}
+}
+
+func (_c *MockKnowledge_Get_Call) Run(run func(ctx context.Context, kind string, id uuid.UUID)) *MockKnowledge_Get_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		var arg1 string
+		if args[1] != nil {
+			arg1 = args[1].(string)
+		}
+		var arg2 uuid.UUID
+		if args[2] != nil {
+			arg2 = args[2].(uuid.UUID)
+		}
+		run(
+			arg0,
+			arg1,
+			arg2,
+		)
+	})
+	return _c
+}
+
+func (_c *MockKnowledge_Get_Call) Return(knowledgeNode domain.KnowledgeNode, err error) *MockKnowledge_Get_Call {
+	_c.Call.Return(knowledgeNode, err)
+	return _c
+}
+
+func (_c *MockKnowledge_Get_Call) RunAndReturn(run func(ctx context.Context, kind string, id uuid.UUID) (domain.KnowledgeNode, error)) *MockKnowledge_Get_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// List provides a mock function for the type MockKnowledge
+func (_mock *MockKnowledge) List(ctx context.Context, kind string, limit int32) ([]domain.KnowledgeNode, error) {
+	ret := _mock.Called(ctx, kind, limit)
+
+	if len(ret) == 0 {
+		panic("no return value specified for List")
+	}
+
+	var r0 []domain.KnowledgeNode
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string, int32) ([]domain.KnowledgeNode, error)); ok {
+		return returnFunc(ctx, kind, limit)
+	}
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string, int32) []domain.KnowledgeNode); ok {
+		r0 = returnFunc(ctx, kind, limit)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).([]domain.KnowledgeNode)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func(context.Context, string, int32) error); ok {
+		r1 = returnFunc(ctx, kind, limit)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockKnowledge_List_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'List'
+type MockKnowledge_List_Call struct {
+	*mock.Call
+}
+
+// List is a helper method to define mock.On call
+//   - ctx context.Context
+//   - kind string
+//   - limit int32
+func (_e *MockKnowledge_Expecter) List(ctx any, kind any, limit any) *MockKnowledge_List_Call {
+	return &MockKnowledge_List_Call{Call: _e.mock.On("List", ctx, kind, limit)}
+}
+
+func (_c *MockKnowledge_List_Call) Run(run func(ctx context.Context, kind string, limit int32)) *MockKnowledge_List_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		var arg1 string
+		if args[1] != nil {
+			arg1 = args[1].(string)
+		}
+		var arg2 int32
+		if args[2] != nil {
+			arg2 = args[2].(int32)
+		}
+		run(
+			arg0,
+			arg1,
+			arg2,
+		)
+	})
+	return _c
+}
+
+func (_c *MockKnowledge_List_Call) Return(knowledgeNodes []domain.KnowledgeNode, err error) *MockKnowledge_List_Call {
+	_c.Call.Return(knowledgeNodes, err)
+	return _c
+}
+
+func (_c *MockKnowledge_List_Call) RunAndReturn(run func(ctx context.Context, kind string, limit int32) ([]domain.KnowledgeNode, error)) *MockKnowledge_List_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // ListSupportedBy provides a mock function for the type MockKnowledge
 func (_mock *MockKnowledge) ListSupportedBy(ctx context.Context, claimID uuid.UUID, sourceID uuid.UUID) ([]domain.KnowledgeEdge, error) {
 	ret := _mock.Called(ctx, claimID, sourceID)

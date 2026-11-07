@@ -15,6 +15,52 @@ import (
 	"github.com/anas-domesticus/personal-agent/internal/domain"
 )
 
+func TestKnowledgeReadTools(t *testing.T) {
+	t.Parallel()
+	knowledge := NewMockKnowledge(t)
+	srv, _ := New(Deps{
+		Agents: NewMockAgents(t), Workflows: NewMockWorkflows(t), Runs: NewMockRuns(t), Knowledge: knowledge, Tools: NewMockTools(t),
+	})
+	session := connect(t, srv)
+	id := uuid.New()
+	node := domain.KnowledgeNode{
+		ID: id, Kind: "objective", Revision: 2, Title: "Grow herbs", Description: "Keep the kitchen supplied",
+		Data: json.RawMessage(`{"title":"Grow herbs","description":"Keep the kitchen supplied","success_criteria":[]}`),
+	}
+	knowledge.EXPECT().Get(mock.Anything, "objective", id).Return(node, nil).Once()
+	got, err := session.CallTool(context.Background(), &mcp.CallToolParams{
+		Name: "get_knowledge_node", Arguments: map[string]any{"kind": "objective", "id": id.String()},
+	})
+	require.NoError(t, err)
+	require.False(t, got.IsError)
+	assert.Equal(t, id.String(), structured(t, got)["id"])
+	assert.Equal(t, "Grow herbs", structured(t, got)["title"])
+
+	invalid, err := session.CallTool(context.Background(), &mcp.CallToolParams{
+		Name: "get_knowledge_node", Arguments: map[string]any{"kind": "objective", "id": "not-a-uuid"},
+	})
+	require.NoError(t, err)
+	assert.True(t, invalid.IsError)
+
+	knowledge.EXPECT().List(mock.Anything, "", int32(10)).Return([]domain.KnowledgeNode{node}, nil).Once()
+	listed, err := session.CallTool(context.Background(), &mcp.CallToolParams{
+		Name: "list_knowledge_nodes", Arguments: map[string]any{},
+	})
+	require.NoError(t, err)
+	require.False(t, listed.IsError)
+	nodes := structured(t, listed)["nodes"].([]any)
+	require.Len(t, nodes, 1)
+	assert.Equal(t, id.String(), nodes[0].(map[string]any)["id"])
+
+	knowledge.EXPECT().List(mock.Anything, "claim", int32(100)).Return([]domain.KnowledgeNode{}, nil).Once()
+	capped, err := session.CallTool(context.Background(), &mcp.CallToolParams{
+		Name: "list_knowledge_nodes", Arguments: map[string]any{"kind": "claim", "limit": 1000},
+	})
+	require.NoError(t, err)
+	require.False(t, capped.IsError)
+	assert.Empty(t, structured(t, capped)["nodes"])
+}
+
 func TestKnowledgeTools(t *testing.T) {
 	t.Parallel()
 	knowledge := NewMockKnowledge(t)

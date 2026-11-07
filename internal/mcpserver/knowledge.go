@@ -10,6 +10,20 @@ import (
 	"github.com/anas-domesticus/personal-agent/internal/domain"
 )
 
+type getKnowledgeNodeInput struct {
+	Kind string `json:"kind" jsonschema:"Predefined node kind: objective, workflow, claim, source or agent."`
+	ID   string `json:"id" jsonschema:"Node UUID."`
+}
+
+type listKnowledgeNodesInput struct {
+	Kind  string `json:"kind,omitempty" jsonschema:"Optional predefined node kind to restrict results."`
+	Limit int32  `json:"limit,omitempty" jsonschema:"Maximum results, from 1 to 100. Defaults to 10."`
+}
+
+type knowledgeNodesOutput struct {
+	Nodes []map[string]any `json:"nodes"`
+}
+
 type upsertKnowledgeNodeInput struct {
 	Kind             string         `json:"kind" jsonschema:"Predefined node kind: objective, workflow, claim, source or agent."`
 	ID               string         `json:"id,omitempty" jsonschema:"Existing node id to update. Omit to create a node."`
@@ -46,6 +60,25 @@ type supportedByEdgesOutput struct {
 }
 
 func registerKnowledgeTools(s *mcp.Server, knowledge Knowledge) {
+	add(s, "get_knowledge_node", "Read a predefined knowledge node's current data by kind and UUID.", readOnly, func(ctx context.Context, in getKnowledgeNodeInput) (map[string]any, error) {
+		id, err := uuid.Parse(in.ID)
+		if err != nil {
+			return nil, fmt.Errorf("parse knowledge node id: %w", err)
+		}
+		node, err := knowledge.Get(ctx, in.Kind, id)
+		if err != nil {
+			return nil, err
+		}
+		return object(node)
+	})
+	add(s, "list_knowledge_nodes", "List current knowledge nodes in deterministic creation order, optionally filtered by kind.", readOnly, func(ctx context.Context, in listKnowledgeNodesInput) (knowledgeNodesOutput, error) {
+		out, err := knowledge.List(ctx, in.Kind, boundedLimit(in.Limit))
+		if err != nil {
+			return knowledgeNodesOutput{}, err
+		}
+		nodes, err := objects(out)
+		return knowledgeNodesOutput{Nodes: nodes}, err
+	})
 	add(s, "upsert_knowledge_node", "Create or update a predefined knowledge node and queue its title and description embeddings.", writing, func(ctx context.Context, in upsertKnowledgeNodeInput) (map[string]any, error) {
 		var id uuid.UUID
 		var err error

@@ -15,7 +15,7 @@ import (
 	"github.com/anas-domesticus/personal-agent/internal/workflow"
 )
 
-const instructions = `Postgres-backed orchestration for agentic tasks. Manage immutable agent and workflow versions, start background workflow runs and inspect their durable results. Workflow graphs contain agent nodes and directed edges; every referenced agent must exist. Starting a run returns its current detail, including a run id for polling with get_run; an optional wait may return the final result immediately. Add and update predefined knowledge nodes with upsert_knowledge_node, then find them by meaning with search_knowledge_nodes.`
+const instructions = `Postgres-backed orchestration for agentic tasks. Manage immutable agent and workflow versions, start background workflow runs and inspect their durable results. Workflow graphs contain agent nodes and directed edges; every referenced agent must exist. Starting a run returns its current detail, including a run id for polling with get_run; an optional wait may return the final result immediately. Add and update predefined knowledge nodes with upsert_knowledge_node, read them with get_knowledge_node or list_knowledge_nodes, and find them by meaning with search_knowledge_nodes. Connect claims to supporting sources with add_supported_by, inspect those relationships with list_supported_by, and remove them with delete_supported_by.`
 
 type Agents interface {
 	List(ctx context.Context) ([]domain.Agent, error)
@@ -47,6 +47,8 @@ type Runs interface {
 
 // Knowledge is implemented by *app.Knowledge.
 type Knowledge interface {
+	Get(ctx context.Context, kind string, id uuid.UUID) (domain.KnowledgeNode, error)
+	List(ctx context.Context, kind string, limit int32) ([]domain.KnowledgeNode, error)
 	Upsert(ctx context.Context, kind string, id uuid.UUID, data json.RawMessage, expectedRevision *int64) (domain.KnowledgeNode, error)
 	Search(ctx context.Context, kind, query string, limit int32) ([]domain.KnowledgeNodeMatch, error)
 	AddSupportedBy(ctx context.Context, claimID, sourceID uuid.UUID) (domain.KnowledgeEdge, error)

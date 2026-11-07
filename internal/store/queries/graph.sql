@@ -47,6 +47,17 @@ from graph_nodes
 where id = $1 and kind = $2
 for update;
 
+-- name: ListGraphNodes :many
+select n.id, n.kind, n.revision, coalesce(v.data, n.data) as data,
+       cast(coalesce(v.data, n.data)->>'title' as text) as title,
+       cast(coalesce(v.data, n.data)->>'description' as text) as description,
+       n.created_at, n.updated_at
+from graph_nodes n
+left join graph_node_versions v on v.node_id = n.id and v.version = n.current_version
+where (sqlc.arg(all_kinds)::bool or n.kind = sqlc.arg(kind)::text)
+order by n.created_at, n.id
+limit sqlc.arg(lim)::int;
+
 -- name: UpdateGraphNodeData :one
 update graph_nodes
 set data = $3, revision = revision + 1, updated_at = now(),

@@ -3,11 +3,11 @@
 Guidance for AI agents and people working in this repo. Read this first, then the documents it links to.
 
 **personal-agent** is a Postgres-backed knowledge and capability service that complements a personal agent. External consumer agents own human-facing LLM interactions; this service owns durable knowledge, deterministic question and evidence tooling, versioned workflow instruction sets and background capabilities suitable for cloud deployment. The current implementation is an orchestration and knowledge-graph MCP server, not a conversational or question-answering product.
-- It serves 24 agent, workflow, run and knowledge-graph tools over unauthenticated, stateless Streamable HTTP and runs explicitly requested workflows in the background.
+- It serves 26 agent, workflow, run and knowledge-graph tools over unauthenticated, stateless Streamable HTTP and runs explicitly requested workflows in the background.
 - Workflow agents use Eino over OpenRouter, Postgres and pgvector for storage, and River for jobs.
 - Workflows are instruction sets, not queries run against the knowledge base. External consumer agents may author, test and iterate them using immutable versions; do not propose or implement workflow changes as part of the product boundary.
 - Agent and workflow definitions, and graph-node snapshots, are immutable and stored in the database.
-- `internal/graph` is wired into `internal/app`, which registers versioned objective, workflow, claim, source and agent types and the claim-to-source `supported_by` edge. MCP exposes node upsert, semantic search and support-relationship add, list and delete; enabled workflow agents expose node upsert and semantic search. Every changed node queues title and description embeddings.
+- `internal/graph` is wired into `internal/app`, which registers versioned objective, workflow, claim, source and agent types and the claim-to-source `supported_by` edge. MCP exposes current node reads, upsert, semantic search and support-relationship add, list and delete; enabled workflow agents expose node upsert and semantic search. Every changed node queues title and description embeddings.
 - Deterministic question tooling will return structured nodes and evidence rather than conversational answers. Ask a Question is future direction. The existing internal agent loop is retained for enrichment jobs and scheduled tasks only in the target boundary; schedules are future and are not implemented. Cloud deployment and authentication are also not implemented. Memory has been removed; do not document or build on it as existing behaviour.
 
 [docs/architecture.md](docs/architecture.md) describes the system as it is now.
