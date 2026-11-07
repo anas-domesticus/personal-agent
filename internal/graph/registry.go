@@ -8,10 +8,12 @@ import (
 	"regexp"
 	"sort"
 
+	"github.com/google/uuid"
 	"github.com/invopop/jsonschema"
 	"github.com/jackc/pgx/v5"
 	schemavalidator "github.com/santhosh-tekuri/jsonschema/v6"
 
+	"github.com/anas-domesticus/personal-agent/internal/domain"
 	"github.com/anas-domesticus/personal-agent/internal/store/db"
 )
 
@@ -21,12 +23,12 @@ type validateData[T any] func(T, json.RawMessage) error
 
 // RegisterNode registers an ordinary node whose current data is updated in
 // place. Use RegisterVersionedNode to retain immutable snapshots.
-func RegisterNode[T any](ctx context.Context, g *Graph, spec NodeSpec[T]) (*NodeRepository[T], error) {
+func RegisterNode[T TextData](ctx context.Context, g *Graph, spec NodeSpec[T]) (*NodeRepository[T], error) {
 	return registerNode(ctx, g, spec, false)
 }
 
 // RegisterVersionedNode registers a node with immutable version history.
-func RegisterVersionedNode[T any](ctx context.Context, g *Graph, spec NodeSpec[T]) (*VersionedNodeRepository[T], error) {
+func RegisterVersionedNode[T TextData](ctx context.Context, g *Graph, spec NodeSpec[T]) (*VersionedNodeRepository[T], error) {
 	repository, err := registerNode(ctx, g, spec, true)
 	if err != nil {
 		return nil, err
@@ -34,7 +36,7 @@ func RegisterVersionedNode[T any](ctx context.Context, g *Graph, spec NodeSpec[T
 	return &VersionedNodeRepository[T]{NodeRepository: repository}, nil
 }
 
-func registerNode[T any](ctx context.Context, g *Graph, spec NodeSpec[T], versioned bool) (*NodeRepository[T], error) {
+func registerNode[T TextData](ctx context.Context, g *Graph, spec NodeSpec[T], versioned bool) (*NodeRepository[T], error) {
 	definition, validate, err := nodeDefinition(spec.Kind, spec.Validate, versioned)
 	if err != nil {
 		return nil, err
@@ -94,11 +96,23 @@ func registerNode[T any](ctx context.Context, g *Graph, spec NodeSpec[T], versio
 	if _, exists := g.nodes[spec.Kind]; exists {
 		return nil, fmt.Errorf("node kind %q is already registered", spec.Kind)
 	}
+	repository := &NodeRepository[T]{graph: g, kind: spec.Kind, validate: validate}
+	registered.upsert = func(ctx context.Context, id uuid.UUID, raw json.RawMessage, opts NodeWriteOptions) (domain.KnowledgeNode, error) {
+		data, err := decodeStrict[T](raw)
+		if err != nil {
+			return domain.KnowledgeNode{}, err
+		}
+		node, err := repository.Upsert(ctx, id, data, opts)
+		if err != nil {
+			return domain.KnowledgeNode{}, err
+		}
+		return knowledgeNode(node)
+	}
 	g.nodes[spec.Kind] = registered
-	return &NodeRepository[T]{graph: g, kind: spec.Kind, validate: validate}, nil
+	return repository, nil
 }
 
-func nodeDefinition[T any](kind string, validate func(T) error, versioned bool) (NodeType, validateData[T], error) {
+func nodeDefinition[T TextData](kind string, validate func(T) error, versioned bool) (NodeType, validateData[T], error) {
 	if !kindPattern.MatchString(kind) {
 		return NodeType{}, nil, fmt.Errorf("node kind %q must match %s", kind, kindPattern)
 	}
@@ -115,6 +129,9 @@ func nodeDefinition[T any](kind string, validate func(T) error, versioned bool) 
 		if err := validateJSON(compiled, encoded); err != nil {
 			return fmt.Errorf("node %q data: %w", kind, err)
 		}
+		if err := checkNodeText(value, encoded); err != nil {
+			return fmt.Errorf("node %q data: %w", kind, err)
+		}
 		if validate != nil {
 			if err := validate(value); err != nil {
 				return fmt.Errorf("node %q data: %w", kind, err)
@@ -123,6 +140,21 @@ func nodeDefinition[T any](kind string, validate func(T) error, versioned bool) 
 		return nil
 	}
 	return NodeType{Kind: kind, Versioned: versioned, DataSchema: raw}, check, nil
+}
+
+func checkNodeText[T TextData](value T, encoded json.RawMessage) error {
+	var persisted struct {
+		Title       *string `json:"title"`
+		Description *string `json:"description"`
+	}
+	if err := json.Unmarshal(encoded, &persisted); err != nil {
+		return fmt.Errorf("decode title and description: %w", err)
+	}
+	title, description := value.NodeText()
+	if persisted.Title == nil || persisted.Description == nil || *persisted.Title != title || *persisted.Description != description {
+		return errors.New("title and description must match NodeText")
+	}
+	return nil
 }
 
 // RegisterEdge registers an edge and its complete set of permitted endpoint

@@ -20,12 +20,12 @@ func TestServer(t *testing.T) {
 	workflows := NewMockWorkflows(t)
 	runs := NewMockRuns(t)
 	tools := NewMockTools(t)
-	srv, _ := New(Deps{Agents: agents, Workflows: workflows, Runs: runs, Tools: tools})
+	srv, _ := New(Deps{Agents: agents, Workflows: workflows, Runs: runs, Knowledge: NewMockKnowledge(t), Tools: tools})
 	session := connect(t, srv)
 
 	listed, err := session.ListTools(context.Background(), nil)
 	require.NoError(t, err)
-	assert.Len(t, listed.Tools, 19)
+	assert.Len(t, listed.Tools, 21)
 	for _, tool := range listed.Tools {
 		assert.NotNil(t, tool.InputSchema, tool.Name)
 		assert.NotNil(t, tool.OutputSchema, tool.Name)

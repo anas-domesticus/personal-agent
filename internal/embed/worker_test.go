@@ -110,11 +110,14 @@ func TestWorker(t *testing.T) {
 	model := "test-model"
 	errDB := errors.New("connection reset")
 	workflow := db.GetWorkflowTextRow{ID: id, Name: "plants", Description: "Water the plants"}
+	graphNode := db.GetGraphNodeEmbeddingTextRow{ID: id, Kind: "claim", Revision: 3, Title: "Plants purify air", Description: "Indoor plants improve air quality"}
 
 	tests := []struct {
-		name   string
-		target embed.Target
-		setup  func(s *embed.MockStore, e *mocks.MockEmbedder)
+		name     string
+		target   embed.Target
+		nodeKind string
+		revision int64
+		setup    func(s *embed.MockStore, e *mocks.MockEmbedder)
 		// wantErrs must all be in the chain of the error Work returns
 		// (errors.Is); River's cancel and snooze errors match any error of
 		// their type. Nil means success.
@@ -132,6 +135,29 @@ func TestWorker(t *testing.T) {
 						p.Embedding != nil && len(p.Embedding.Slice()) == embed.Dimensions &&
 						p.EmbeddingModel != nil && *p.EmbeddingModel == model
 				})).Return(1, nil).Once()
+			},
+		},
+		{
+			name:     "graph node title and description are embedded together",
+			target:   embed.TargetGraphNode,
+			nodeKind: "claim",
+			revision: 3,
+			setup: func(s *embed.MockStore, e *mocks.MockEmbedder) {
+				s.EXPECT().GetGraphNodeEmbeddingText(mock.Anything, db.GetGraphNodeEmbeddingTextParams{ID: id, Kind: "claim"}).Return(graphNode, nil).Once()
+				e.EXPECT().EmbedStrings(mock.Anything, []string{graphNode.Title, graphNode.Description}).Return([][]float64{vector(embed.Dimensions)[0], vector(embed.Dimensions)[0]}, nil).Once()
+				s.EXPECT().SetGraphNodeEmbeddings(mock.Anything, mock.MatchedBy(func(p db.SetGraphNodeEmbeddingsParams) bool {
+					return p.ID == id && p.Kind == "claim" && p.Revision == 3 && p.EmbeddingRevision != nil && *p.EmbeddingRevision == 3 &&
+						p.TitleEmbedding != nil && p.DescriptionEmbedding != nil && p.EmbeddingModel != nil && *p.EmbeddingModel == model
+				})).Return(1, nil).Once()
+			},
+		},
+		{
+			name:     "stale graph node revision is acknowledged",
+			target:   embed.TargetGraphNode,
+			nodeKind: "claim",
+			revision: 2,
+			setup: func(s *embed.MockStore, _ *mocks.MockEmbedder) {
+				s.EXPECT().GetGraphNodeEmbeddingText(mock.Anything, db.GetGraphNodeEmbeddingTextParams{ID: id, Kind: "claim"}).Return(graphNode, nil).Once()
 			},
 		},
 		{
@@ -184,7 +210,7 @@ func TestWorker(t *testing.T) {
 			}
 			w := &embed.Worker{Store: store, Embedder: embedder, Model: model}
 
-			err := w.Work(context.Background(), &river.Job[embed.Args]{Args: embed.Args{Target: tt.target, ID: id}})
+			err := w.Work(context.Background(), &river.Job[embed.Args]{Args: embed.Args{Target: tt.target, ID: id, NodeKind: tt.nodeKind, Revision: tt.revision}})
 			if tt.wantErrs == nil {
 				require.NoError(t, err)
 				return

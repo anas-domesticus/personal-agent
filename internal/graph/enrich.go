@@ -11,6 +11,7 @@ import (
 	"github.com/riverqueue/river"
 	"github.com/riverqueue/river/rivertype"
 
+	"github.com/anas-domesticus/personal-agent/internal/embed"
 	"github.com/anas-domesticus/personal-agent/internal/store/db"
 )
 
@@ -62,6 +63,17 @@ func (g *Graph) queue(ctx context.Context, tx pgx.Tx, args EnrichmentArgs) error
 	}
 	if _, err := g.jobs.InsertTx(ctx, tx, args, nil); err != nil {
 		return fmt.Errorf("queue graph enrichment: %w", err)
+	}
+	return nil
+}
+
+func (g *Graph) queueNode(ctx context.Context, tx pgx.Tx, args EnrichmentArgs) error {
+	if err := g.queue(ctx, tx, args); err != nil {
+		return err
+	}
+	embedding := embed.Args{Target: embed.TargetGraphNode, ID: args.ID, NodeKind: args.Type, Revision: args.Revision}
+	if _, err := g.jobs.InsertTx(ctx, tx, embedding, nil); err != nil {
+		return fmt.Errorf("queue graph node embedding: %w", err)
 	}
 	return nil
 }

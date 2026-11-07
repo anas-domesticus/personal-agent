@@ -2,8 +2,14 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 
+	"github.com/cloudwego/eino/components/embedding"
+	"github.com/google/uuid"
+
+	"github.com/anas-domesticus/personal-agent/internal/domain"
+	"github.com/anas-domesticus/personal-agent/internal/embed"
 	"github.com/anas-domesticus/personal-agent/internal/graph"
 	"github.com/anas-domesticus/personal-agent/internal/knowledge"
 )
@@ -16,10 +22,17 @@ type Knowledge struct {
 	Claims     *graph.VersionedNodeRepository[knowledge.Claim]
 	Sources    *graph.VersionedNodeRepository[knowledge.Source]
 	Agents     *graph.VersionedNodeRepository[knowledge.Agent]
+
+	graph    *graph.Graph
+	embedder embedding.Embedder
+	model    string
 }
 
-func registerKnowledge(ctx context.Context, g *graph.Graph) (Knowledge, error) {
+func registerKnowledge(ctx context.Context, g *graph.Graph, embedder embedding.Embedder, model string) (Knowledge, error) {
 	var out Knowledge
+	out.graph = g
+	out.embedder = embedder
+	out.model = model
 	var err error
 	if out.Objectives, err = graph.RegisterVersionedNode(ctx, g, graph.NodeSpec[knowledge.Objective]{
 		Kind: knowledge.ObjectiveKind, Validate: knowledge.Objective.Validate,
@@ -47,4 +60,23 @@ func registerKnowledge(ctx context.Context, g *graph.Graph) (Knowledge, error) {
 		return Knowledge{}, fmt.Errorf("register agent: %w", err)
 	}
 	return out, nil
+}
+
+// Upsert writes a predefined node through its registered typed repository.
+func (k *Knowledge) Upsert(ctx context.Context, kind string, id uuid.UUID, data json.RawMessage, expectedRevision *int64) (domain.KnowledgeNode, error) {
+	return k.graph.UpsertNode(ctx, kind, id, data, graph.NodeWriteOptions{
+		WriteOptions: graph.WriteOptions{ExpectedRevision: expectedRevision},
+	})
+}
+
+// Search finds predefined nodes by semantic similarity to title or description.
+func (k *Knowledge) Search(ctx context.Context, kind, query string, limit int32) ([]domain.KnowledgeNodeMatch, error) {
+	if k.embedder == nil {
+		return nil, fmt.Errorf("knowledge node search: %w", domain.ErrUnavailable)
+	}
+	vector, err := embed.Text(ctx, k.embedder, query)
+	if err != nil {
+		return nil, fmt.Errorf("embed knowledge node query: %w", err)
+	}
+	return k.graph.SearchNodes(ctx, kind, vector, k.model, limit)
 }

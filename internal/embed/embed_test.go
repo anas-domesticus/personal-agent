@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/cloudwego/eino/components/embedding"
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/riverqueue/river"
@@ -16,6 +17,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/anas-domesticus/personal-agent/internal/embed"
+	"github.com/anas-domesticus/personal-agent/internal/graph"
 	"github.com/anas-domesticus/personal-agent/internal/mocks"
 	"github.com/anas-domesticus/personal-agent/internal/store/db"
 	"github.com/anas-domesticus/personal-agent/internal/testdb"
@@ -61,6 +63,13 @@ func TestSweepEmbedsMissingRows(t *testing.T) {
 
 	w, err := st.CreateWorkflow(ctx, db.CreateWorkflowParams{Name: "evening-lights", Description: "Turn on the hall lights at sunset"})
 	require.NoError(t, err)
+	_, err = st.InsertGraphNodeType(ctx, db.InsertGraphNodeTypeParams{Kind: "sweep_note", Versioned: false, DataSchema: []byte(`{}`)})
+	require.NoError(t, err)
+	nodeID := uuid.New()
+	_, err = st.InsertGraphNode(ctx, db.InsertGraphNodeParams{
+		ID: nodeID, Kind: "sweep_note", Versioned: false, Data: []byte(`{"title":"Sweep title","description":"Sweep description"}`),
+	})
+	require.NoError(t, err)
 	client := startRiver(t, st.Pool, st.Queries, embedder(t))
 
 	// The sweep runs on start, queues a workflow job, and embeds the row.
@@ -75,6 +84,11 @@ func TestSweepEmbedsMissingRows(t *testing.T) {
 		return readErr != nil || wf.EmbeddingModel != nil && *wf.EmbeddingModel == "test-model"
 	}, "rows not embedded in time")
 	require.NoError(t, readErr)
+	waitFor(t, func() bool {
+		var revision int64
+		err := st.Pool.QueryRow(ctx, `select embedding_revision from graph_nodes where id = $1`, nodeID).Scan(&revision)
+		return err == nil && revision == 1
+	}, "graph node was not embedded by the sweep")
 
 	// An edit after a completed embed job must be embedded again, even
 	// though the completed job is still in the queue table. (River records
@@ -92,6 +106,59 @@ func TestSweepEmbedsMissingRows(t *testing.T) {
 		wf, err := st.GetWorkflowByName(ctx, w.Name)
 		return err == nil && wf.EmbeddingModel != nil
 	}, "workflow not re-embedded")
+}
+
+type graphData struct {
+	Title       string `json:"title"`
+	Description string `json:"description"`
+}
+
+func (d graphData) NodeText() (string, string) { return d.Title, d.Description }
+
+type discardEnrichment struct {
+	river.WorkerDefaults[graph.EnrichmentArgs]
+}
+
+func (*discardEnrichment) Work(context.Context, *river.Job[graph.EnrichmentArgs]) error { return nil }
+
+func TestGraphNodeWriteQueuesEmbeddings(t *testing.T) {
+	st, _ := testdb.Open(t)
+	ctx := context.Background()
+	cfg := &river.Config{}
+	embed.Register(cfg, st.Queries, embedder(t), "test-model")
+	river.AddWorker(cfg.Workers, &discardEnrichment{})
+	client, err := river.NewClient[pgx.Tx](riverpgxv5.New(st.Pool), cfg)
+	require.NoError(t, err)
+	require.NoError(t, client.Start(ctx))
+	t.Cleanup(func() { _ = client.Stop(context.Background()) })
+	g := graph.New(st, client)
+	repository, err := graph.RegisterVersionedNode(ctx, g, graph.NodeSpec[graphData]{Kind: "embedding_note"})
+	require.NoError(t, err)
+
+	created, err := repository.Upsert(ctx, uuid.Nil, graphData{Title: "First title", Description: "First description"}, graph.NodeWriteOptions{})
+	require.NoError(t, err)
+	waitFor(t, func() bool {
+		var revision int64
+		err := st.Pool.QueryRow(ctx, `select embedding_revision from graph_nodes where id = $1`, created.ID).Scan(&revision)
+		return err == nil && revision == 1
+	}, "created graph node was not embedded")
+
+	updated, err := repository.Upsert(ctx, created.ID, graphData{Title: "Second title", Description: "Second description"}, graph.NodeWriteOptions{})
+	require.NoError(t, err)
+	waitFor(t, func() bool {
+		var revision int64
+		err := st.Pool.QueryRow(ctx, `select embedding_revision from graph_nodes where id = $1`, updated.ID).Scan(&revision)
+		return err == nil && revision == 2
+	}, "updated graph node was not embedded")
+
+	rolledBack, err := repository.Rollback(ctx, created.ID, 1, graph.WriteOptions{})
+	require.NoError(t, err)
+	waitFor(t, func() bool {
+		var revision int64
+		var model string
+		err := st.Pool.QueryRow(ctx, `select embedding_revision, embedding_model from graph_nodes where id = $1`, rolledBack.ID).Scan(&revision, &model)
+		return err == nil && revision == 3 && model == "test-model"
+	}, "rolled back graph node was not embedded")
 }
 
 func waitFor(t *testing.T, cond func() bool, msg string) {

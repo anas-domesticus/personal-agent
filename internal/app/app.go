@@ -100,9 +100,6 @@ func New(ctx context.Context, cfg config.Config, opts Options) (_ *App, err erro
 		return nil, fmt.Errorf("river client: %w", err)
 	}
 	a.Graph = graph.New(a.Store, a.Jobs)
-	if a.Knowledge, err = registerKnowledge(ctx, a.Graph); err != nil {
-		return nil, err
-	}
 
 	llmCfg := llm.Config{APIKey: cfg.OpenRouterAPIKey}
 	hasKey := cfg.OpenRouterAPIKey != ""
@@ -123,6 +120,9 @@ func New(ctx context.Context, cfg config.Config, opts Options) (_ *App, err erro
 		if _, err := embed.Text(ctx, embedder, "dimension check"); err != nil {
 			return nil, fmt.Errorf("embedding model %s: %w", cfg.EmbeddingModel, err)
 		}
+	}
+	if a.Knowledge, err = registerKnowledge(ctx, a.Graph, embedder, cfg.EmbeddingModel); err != nil {
+		return nil, err
 	}
 	hasModels := models != nil
 	if !hasModels {

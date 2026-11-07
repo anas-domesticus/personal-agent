@@ -31,7 +31,7 @@ Check each of these, in order of importance:
    - Tests check behaviour, not implementation details.
 6. **Docs.**
    - Changed behaviour, settings, tools or packages are reflected in the appropriate places: `docs/architecture.md`, `.env.example`, `AGENTS.md`, `README.md` and `Taskfile.yml` descriptions.
-   - Current capabilities are distinguished from future direction. Internal graph registration is described accurately, no graph MCP tools or Ask a Question are claimed, and removed memory behaviour is not revived.
+   - Current capabilities are distinguished from future direction. Graph registration and MCP node operations are described accurately, Ask a Question is not claimed, and removed memory behaviour is not revived.
    - New packages have a package comment.
 7. **Simplicity.** Code that could be deleted or reuse something that exists. Abstractions with one caller and no reason to exist. Comments that say what rather than why.
 

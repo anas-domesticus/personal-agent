@@ -70,14 +70,18 @@ type GraphEdgeTypeEndpoint struct {
 }
 
 type GraphNode struct {
-	ID             uuid.UUID       `json:"id"`
-	Kind           string          `json:"kind"`
-	Versioned      bool            `json:"versioned"`
-	Data           json.RawMessage `json:"data"`
-	CurrentVersion *int64          `json:"current_version"`
-	Revision       int64           `json:"revision"`
-	CreatedAt      time.Time       `json:"created_at"`
-	UpdatedAt      time.Time       `json:"updated_at"`
+	ID                   uuid.UUID        `json:"id"`
+	Kind                 string           `json:"kind"`
+	Versioned            bool             `json:"versioned"`
+	Data                 json.RawMessage  `json:"data"`
+	CurrentVersion       *int64           `json:"current_version"`
+	Revision             int64            `json:"revision"`
+	CreatedAt            time.Time        `json:"created_at"`
+	UpdatedAt            time.Time        `json:"updated_at"`
+	TitleEmbedding       *pgvector.Vector `json:"title_embedding"`
+	DescriptionEmbedding *pgvector.Vector `json:"description_embedding"`
+	EmbeddingModel       *string          `json:"embedding_model"`
+	EmbeddingRevision    *int64           `json:"embedding_revision"`
 }
 
 type GraphNodeType struct {

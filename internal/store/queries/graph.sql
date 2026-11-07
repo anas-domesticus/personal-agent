@@ -49,13 +49,15 @@ for update;
 
 -- name: UpdateGraphNodeData :one
 update graph_nodes
-set data = $3, revision = revision + 1, updated_at = now()
+set data = $3, revision = revision + 1, updated_at = now(),
+    title_embedding = null, description_embedding = null, embedding_model = null, embedding_revision = null
 where id = $1 and kind = $2
 returning *;
 
 -- name: SetGraphNodeVersion :one
 update graph_nodes
-set current_version = $3, revision = revision + 1, updated_at = now()
+set current_version = $3, revision = revision + 1, updated_at = now(),
+    title_embedding = null, description_embedding = null, embedding_model = null, embedding_revision = null
 where id = $1 and kind = $2
 returning *;
 
@@ -127,3 +129,48 @@ select *
 from graph_edges
 where kind = $1 and target_id = $2
 order by created_at, id;
+
+-- name: GetGraphNodeEmbeddingText :one
+select n.id, n.kind, n.revision,
+       cast(coalesce(v.data, n.data)->>'title' as text) as title,
+       cast(coalesce(v.data, n.data)->>'description' as text) as description
+from graph_nodes n
+left join graph_node_versions v on v.node_id = n.id and v.version = n.current_version
+where n.id = $1 and n.kind = $2;
+
+-- name: SetGraphNodeEmbeddings :execrows
+update graph_nodes
+set title_embedding = sqlc.arg(title_embedding),
+    description_embedding = sqlc.arg(description_embedding),
+    embedding_model = sqlc.arg(embedding_model),
+    embedding_revision = sqlc.arg(embedding_revision)
+where id = sqlc.arg(id) and kind = sqlc.arg(kind) and revision = sqlc.arg(revision);
+
+-- name: ListGraphNodesMissingEmbeddings :many
+select id, kind as node_kind, revision
+from graph_nodes
+where title_embedding is null or description_embedding is null
+   or embedding_model is distinct from sqlc.arg(model)::text
+   or embedding_revision is distinct from revision
+limit sqlc.arg(lim);
+
+-- name: SearchGraphNodes :many
+select id, kind, revision, data, title, description, created_at, updated_at, score
+from (
+    select n.id, n.kind, n.revision, coalesce(v.data, n.data) as data,
+           cast(coalesce(v.data, n.data)->>'title' as text) as title,
+           cast(coalesce(v.data, n.data)->>'description' as text) as description,
+           n.created_at, n.updated_at,
+           (1 - least(n.title_embedding <=> sqlc.arg(embedding)::vector,
+                      n.description_embedding <=> sqlc.arg(embedding)::vector))::float8 as score,
+           least(n.title_embedding <=> sqlc.arg(embedding)::vector,
+                 n.description_embedding <=> sqlc.arg(embedding)::vector) as distance
+    from graph_nodes n
+    left join graph_node_versions v on v.node_id = n.id and v.version = n.current_version
+    where n.embedding_model = sqlc.arg(model)::text
+      and n.embedding_revision = n.revision
+      and n.title_embedding is not null and n.description_embedding is not null
+      and (sqlc.arg(all_kinds)::bool or n.kind = sqlc.arg(kind)::text)
+) matches
+order by distance
+limit sqlc.arg(lim)::int;

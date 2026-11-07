@@ -99,6 +99,26 @@ type WorkflowMatch struct {
 	Score float64 `json:"score"`
 }
 
+// --- Knowledge graph ----------------------------------------------------------
+
+// KnowledgeNode is one current predefined graph node.
+type KnowledgeNode struct {
+	ID          uuid.UUID       `json:"id"`
+	Kind        string          `json:"kind"`
+	Revision    int64           `json:"revision"`
+	Title       string          `json:"title"`
+	Description string          `json:"description"`
+	Data        json.RawMessage `json:"data"`
+	CreatedAt   time.Time       `json:"created_at"`
+	UpdatedAt   time.Time       `json:"updated_at"`
+}
+
+// KnowledgeNodeMatch is a semantic graph search result.
+type KnowledgeNodeMatch struct {
+	KnowledgeNode
+	Score float64 `json:"score"`
+}
+
 // --- Runs ---------------------------------------------------------------------
 
 type RunStatus string

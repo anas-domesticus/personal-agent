@@ -20,6 +20,8 @@ import (
 
 const drainTimeout = 30 * time.Second
 
+var _ mcpserver.Knowledge = (*app.Knowledge)(nil)
+
 func main() {
 	if err := run(); err != nil {
 		fmt.Fprintln(os.Stderr, "orchestrator:", err)
@@ -51,7 +53,7 @@ func run() error {
 	}
 
 	_, handler := mcpserver.New(mcpserver.Deps{
-		Agents: a.Agents, Workflows: a.Workflows, Runs: a.Runs, Tools: a.Tools,
+		Agents: a.Agents, Workflows: a.Workflows, Runs: a.Runs, Knowledge: &a.Knowledge, Tools: a.Tools,
 	})
 	var lc net.ListenConfig
 	ln, err := lc.Listen(ctx, "tcp", cfg.ListenAddr)

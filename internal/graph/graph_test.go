@@ -18,16 +18,26 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/anas-domesticus/personal-agent/internal/domain"
+	"github.com/anas-domesticus/personal-agent/internal/embed"
 	"github.com/anas-domesticus/personal-agent/internal/graph"
 	"github.com/anas-domesticus/personal-agent/internal/store"
 	"github.com/anas-domesticus/personal-agent/internal/testdb"
 )
 
+type details struct {
+	Title       string `json:"title"`
+	Description string `json:"description"`
+}
+
+func (d details) NodeText() (string, string) { return d.Title, d.Description }
+
 type person struct {
+	details
 	Name string `json:"name"`
 }
 
 type note struct {
+	details
 	Text string `json:"text"`
 }
 
@@ -37,9 +47,10 @@ type relationship struct {
 
 // jobRecorder is a stateful recorder rather than a script of mock calls.
 type jobRecorder struct {
-	mu   sync.Mutex
-	jobs []graph.EnrichmentArgs
-	err  error
+	mu         sync.Mutex
+	jobs       []graph.EnrichmentArgs
+	embeddings []embed.Args
+	err        error
 }
 
 var _ graph.JobInserter = (*jobRecorder)(nil)
@@ -50,7 +61,14 @@ func (r *jobRecorder) InsertTx(_ context.Context, _ pgx.Tx, args river.JobArgs, 
 	if r.err != nil {
 		return nil, r.err
 	}
-	r.jobs = append(r.jobs, args.(graph.EnrichmentArgs))
+	switch typed := args.(type) {
+	case graph.EnrichmentArgs:
+		r.jobs = append(r.jobs, typed)
+	case embed.Args:
+		r.embeddings = append(r.embeddings, typed)
+	default:
+		return nil, errors.New("unexpected job type")
+	}
 	return &rivertype.JobInsertResult{}, nil
 }
 
@@ -58,6 +76,12 @@ func (r *jobRecorder) recorded() []graph.EnrichmentArgs {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return append([]graph.EnrichmentArgs(nil), r.jobs...)
+}
+
+func (r *jobRecorder) recordedEmbeddings() []embed.Args {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]embed.Args(nil), r.embeddings...)
 }
 
 func newGraph(t *testing.T) (*store.Store, *graph.Graph, *jobRecorder) {
@@ -86,6 +110,7 @@ func TestOrdinaryNodeUpsert(t *testing.T) {
 	assert.NotEqual(t, uuid.Nil, created.ID)
 	assert.Equal(t, int64(1), created.Revision)
 	assert.Equal(t, []graph.EnrichmentArgs{{Entity: graph.EntityNode, Type: "person", ID: created.ID, Revision: 1}}, jobs.recorded())
+	assert.Equal(t, []embed.Args{{Target: embed.TargetGraphNode, NodeKind: "person", ID: created.ID, Revision: 1}}, jobs.recordedEmbeddings())
 
 	unchanged, err := repository.Upsert(context.Background(), created.ID, person{Name: "Ada"}, graph.NodeWriteOptions{
 		WriteOptions: graph.WriteOptions{ExpectedRevision: &created.Revision},
@@ -93,6 +118,7 @@ func TestOrdinaryNodeUpsert(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, created, unchanged)
 	assert.Len(t, jobs.recorded(), 1)
+	assert.Len(t, jobs.recordedEmbeddings(), 1)
 
 	updated, err := repository.Upsert(context.Background(), created.ID, person{Name: "Grace"}, graph.NodeWriteOptions{
 		WriteOptions: graph.WriteOptions{ExpectedRevision: &created.Revision},
@@ -101,6 +127,8 @@ func TestOrdinaryNodeUpsert(t *testing.T) {
 	assert.Equal(t, person{Name: "Grace"}, updated.Data)
 	assert.Equal(t, int64(2), updated.Revision)
 	assert.Len(t, jobs.recorded(), 2)
+	require.Len(t, jobs.recordedEmbeddings(), 2)
+	assert.Equal(t, int64(2), jobs.recordedEmbeddings()[1].Revision)
 
 	stale := int64(1)
 	_, err = repository.Upsert(context.Background(), created.ID, person{Name: "Stale"}, graph.NodeWriteOptions{
@@ -108,6 +136,7 @@ func TestOrdinaryNodeUpsert(t *testing.T) {
 	})
 	require.ErrorIs(t, err, domain.ErrConflict)
 	assert.Len(t, jobs.recorded(), 2)
+	assert.Len(t, jobs.recordedEmbeddings(), 2)
 
 	_, err = repository.Upsert(context.Background(), uuid.Nil, person{}, graph.NodeWriteOptions{})
 	require.ErrorContains(t, err, "name is required")
@@ -132,6 +161,7 @@ func TestVersionedNodeHistoryAndRollback(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, created, sameData)
 	assert.Len(t, jobs.recorded(), 1)
+	assert.Len(t, jobs.recordedEmbeddings(), 1)
 	_, err = repository.Upsert(context.Background(), created.ID, note{Text: "two"}, graph.NodeWriteOptions{
 		Metadata: []byte(`{"reason":"correction"}`),
 	})
@@ -169,6 +199,7 @@ func TestVersionedNodeHistoryAndRollback(t *testing.T) {
 	assert.Equal(t, int64(4), rolledBack.Revision)
 	assert.Equal(t, note{Text: "one"}, rolledBack.Data)
 	assert.Len(t, jobs.recorded(), 4)
+	assert.Len(t, jobs.recordedEmbeddings(), 4)
 
 	history, err := repository.Versions(context.Background(), created.ID, graph.HistoryOptions{})
 	require.NoError(t, err)
@@ -178,6 +209,7 @@ func TestVersionedNodeHistoryAndRollback(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, rolledBack, unchanged)
 	assert.Len(t, jobs.recorded(), 4)
+	assert.Len(t, jobs.recordedEmbeddings(), 4)
 
 	appended, err := repository.Upsert(context.Background(), created.ID, note{Text: "four"}, graph.NodeWriteOptions{
 		WriteOptions: graph.WriteOptions{ExpectedRevision: &rolledBack.Revision},
@@ -188,6 +220,7 @@ func TestVersionedNodeHistoryAndRollback(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, int64(4), afterAppend.CurrentVersion)
 	assert.Len(t, jobs.recorded(), 5)
+	assert.Len(t, jobs.recordedEmbeddings(), 5)
 
 	_, err = st.Pool.Exec(context.Background(), `update graph_node_versions set data = '{"text":"changed"}' where node_id = $1 and version = 1`, created.ID)
 	require.ErrorContains(t, err, "immutable")
@@ -269,6 +302,7 @@ func TestEdgesAndDatabaseConstraints(t *testing.T) {
 	require.NoError(t, likes.Delete(context.Background(), otherKind.ID))
 	require.NoError(t, people.Delete(context.Background(), ada.ID))
 	assert.Len(t, jobs.recorded(), 5)
+	assert.Len(t, jobs.recordedEmbeddings(), 3)
 }
 
 func TestEnrichmentHandlersAndStaleJobs(t *testing.T) {
@@ -380,8 +414,10 @@ func TestGraphMigrationDown(t *testing.T) {
 	t.Cleanup(func() { require.NoError(t, database.Close()) })
 	provider, err := goose.NewProvider(goose.DialectPostgres, database, os.DirFS("../store/migrations"))
 	require.NoError(t, err)
-	_, err = provider.Down(context.Background())
-	require.NoError(t, err)
+	for range 2 {
+		_, err = provider.Down(context.Background())
+		require.NoError(t, err)
+	}
 	var table *string
 	require.NoError(t, database.QueryRowContext(context.Background(), `select to_regclass('graph_nodes')`).Scan(&table))
 	assert.Nil(t, table)

@@ -2,18 +2,19 @@
 
 A Postgres-backed knowledge base in the making, with agents supporting the work of collecting, organising and using knowledge.
 
-**Today, the implemented product is an orchestration MCP server, not a conversational assistant or question-answering interface.** Its 19 MCP tools manage agent definitions, DAG workflows and durable background runs. The application also registers an internal knowledge graph with versioned objectives, workflows, claims, sources and agents, but does not expose graph operations through MCP.
+**Today, the implemented product is an orchestration and knowledge-graph MCP server, not a conversational assistant or question-answering interface.** Its 21 MCP tools manage agent definitions, DAG workflows, durable background runs and predefined knowledge nodes. The graph stores versioned objectives, workflows, claims, sources and agents, embeds every node's title and description, and supports semantic node search.
 
 ## Direction
 
-The long-term centre of the product is a durable, queryable knowledge base in Postgres. Agents will help curate and use that knowledge, including an **Ask a Question** experience grounded in what is stored. Ask a Question and public knowledge-base APIs are future direction, not current behaviour. The former memory feature has been removed.
+The long-term centre of the product is a durable, queryable knowledge base in Postgres. Agents will help curate and use that knowledge, including an **Ask a Question** experience grounded in what is stored. Ask a Question is future direction, not current behaviour. The former memory feature has been removed.
 
 ## What it does now
 
-- Exposes 19 agent, workflow and run management operations through typed MCP tools.
+- Exposes 21 agent, workflow, run and knowledge-node operations through typed MCP tools.
 - Runs agentic DAG workflows in the background with River and records every step in Postgres.
 - Stores immutable agent and workflow versions, including promotion and rollback.
-- Registers versioned objective, workflow, claim, source and agent types in the internal Postgres graph. The graph module also supports constrained edges, rollback and externally defined enrichment handlers; the base schema registers no relationships or handlers.
+- Registers versioned objective, workflow, claim, source and agent types in the Postgres graph. The graph module also supports constrained edges, rollback and externally defined enrichment handlers; the base schema registers no relationships or handlers.
+- Queues separate title and description embeddings whenever a knowledge node changes and searches current nodes by semantic similarity.
 - Searches workflows by meaning and keywords with pgvector.
 - Gives workflow agents configurable file, shell, web, clock and external MCP tools.
 
@@ -40,7 +41,9 @@ The endpoint is `http://127.0.0.1:7433/mcp`, using stateless Streamable HTTP. Co
 - **Workflows:** list, search, get, list versions, create, append versions, promote or roll back versions, update descriptions and delete.
 - **Runs:** start a workflow, optionally wait briefly, list recent runs and inspect durable node results.
 
-These are management tools: there is currently no MCP tool for storing or querying knowledge-graph entities and no Ask a Question operation.
+- **Knowledge nodes:** create or update any predefined objective, workflow, claim, source or agent with `upsert_knowledge_node`; search current nodes by title or description meaning with `search_knowledge_nodes`.
+
+Ask a Question is not implemented.
 
 Deleting a workflow with recorded runs returns a conflict rather than destroying execution history.
 

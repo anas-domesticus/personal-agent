@@ -15,7 +15,7 @@ import (
 	"github.com/anas-domesticus/personal-agent/internal/workflow"
 )
 
-const instructions = `Postgres-backed orchestration for agentic tasks. Manage immutable agent and workflow versions, start background workflow runs and inspect their durable results. Workflow graphs contain agent nodes and directed edges; every referenced agent must exist. Starting a run returns its current detail, including a run id for polling with get_run; an optional wait may return the final result immediately.`
+const instructions = `Postgres-backed orchestration for agentic tasks. Manage immutable agent and workflow versions, start background workflow runs and inspect their durable results. Workflow graphs contain agent nodes and directed edges; every referenced agent must exist. Starting a run returns its current detail, including a run id for polling with get_run; an optional wait may return the final result immediately. Add and update predefined knowledge nodes with upsert_knowledge_node, then find them by meaning with search_knowledge_nodes.`
 
 type Agents interface {
 	List(ctx context.Context) ([]domain.Agent, error)
@@ -45,6 +45,12 @@ type Runs interface {
 	List(ctx context.Context, workflow string, limit int32) ([]domain.Run, error)
 }
 
+// Knowledge is implemented by *app.Knowledge.
+type Knowledge interface {
+	Upsert(ctx context.Context, kind string, id uuid.UUID, data json.RawMessage, expectedRevision *int64) (domain.KnowledgeNode, error)
+	Search(ctx context.Context, kind, query string, limit int32) ([]domain.KnowledgeNodeMatch, error)
+}
+
 type Tools interface {
 	Assignable() []kit.Info
 }
@@ -53,6 +59,7 @@ type Deps struct {
 	Agents    Agents
 	Workflows Workflows
 	Runs      Runs
+	Knowledge Knowledge
 	Tools     Tools
 }
 
@@ -61,6 +68,7 @@ func New(d Deps) (*mcp.Server, http.Handler) {
 	registerAgentTools(s, d.Agents, d.Tools)
 	registerWorkflowTools(s, d.Workflows)
 	registerRunTools(s, d.Runs)
+	registerKnowledgeTools(s, d.Knowledge)
 	h := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return s }, &mcp.StreamableHTTPOptions{
 		Stateless:    true,
 		JSONResponse: true,

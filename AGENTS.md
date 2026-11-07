@@ -2,12 +2,12 @@
 
 Guidance for AI agents and people working in this repo. Read this first, then the documents it links to.
 
-**personal-agent** is becoming a Postgres-backed knowledge base, with agents supporting knowledge collection, organisation and use. The current implementation is an orchestration MCP server, not a question-answering product.
-- It serves 19 agent, workflow and run management tools over unauthenticated, stateless Streamable HTTP and runs workflows in the background.
+**personal-agent** is becoming a Postgres-backed knowledge base, with agents supporting knowledge collection, organisation and use. The current implementation is an orchestration and knowledge-graph MCP server, not a question-answering product.
+- It serves 21 agent, workflow, run and knowledge-node tools over unauthenticated, stateless Streamable HTTP and runs workflows in the background.
 - Workflow agents use Eino over OpenRouter, Postgres and pgvector for storage, and River for jobs.
 - Agent and workflow definitions, and graph-node snapshots, are immutable and stored in the database.
-- `internal/graph` is wired into `internal/app`, which registers versioned objective, workflow, claim, source and agent types. Graph operations are not exposed through MCP.
-- Ask a Question and public knowledge-base interfaces are future direction. Memory has been removed; do not document or build on it as existing behaviour.
+- `internal/graph` is wired into `internal/app`, which registers versioned objective, workflow, claim, source and agent types. MCP exposes node upsert and semantic search; every changed node queues title and description embeddings.
+- Ask a Question is future direction. Memory has been removed; do not document or build on it as existing behaviour.
 
 [docs/architecture.md](docs/architecture.md) describes the system as it is now.
 
@@ -71,7 +71,7 @@ cmd/orchestrator/        MCP server and background-worker entrypoint
 internal/mcpserver/      typed MCP tools and Streamable HTTP transport
 internal/app/            composition root: builds and wires everything
 internal/domain/         shared types and sentinel errors
-internal/graph/          generic typed graph, immutable node history and enrichment
+internal/graph/          generic typed graph, immutable node history, enrichment and semantic search
 internal/knowledge/      first-class objective, workflow, claim, source and agent types
 internal/<service>/      catalog, chat, runs, agent, embed, ...
 internal/tools/          workflow-agent tool registry; one subpackage per tool set
@@ -93,4 +93,4 @@ Docs are part of the change, not a follow-up. In the same change:
 - **MCP tools change:** document their semantics in `docs/architecture.md` and test them through an MCP client.
 - **These rules turn out to be wrong or incomplete:** fix this file.
 
-Write docs in plain British English and use the present tense for implemented behaviour. Keep future product direction clearly labelled and separate from current capabilities; never describe the internal graph, Ask a Question or removed memory APIs as available to users.
+Write docs in plain British English and use the present tense for implemented behaviour. Keep future product direction clearly labelled and separate from current capabilities; never describe Ask a Question or removed memory APIs as available to users.

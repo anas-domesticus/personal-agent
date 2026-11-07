@@ -8,8 +8,10 @@ package db
 import (
 	"context"
 	"encoding/json"
+	"time"
 
 	"github.com/google/uuid"
+	pgvector "github.com/pgvector/pgvector-go"
 )
 
 const deleteGraphEdge = `-- name: DeleteGraphEdge :execrows
@@ -157,7 +159,7 @@ func (q *Queries) GetGraphEdgeType(ctx context.Context, kind string) (GetGraphEd
 }
 
 const getGraphNode = `-- name: GetGraphNode :one
-select id, kind, versioned, data, current_version, revision, created_at, updated_at
+select id, kind, versioned, data, current_version, revision, created_at, updated_at, title_embedding, description_embedding, embedding_model, embedding_revision
 from graph_nodes
 where id = $1 and kind = $2
 `
@@ -179,12 +181,51 @@ func (q *Queries) GetGraphNode(ctx context.Context, arg GetGraphNodeParams) (Gra
 		&i.Revision,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.TitleEmbedding,
+		&i.DescriptionEmbedding,
+		&i.EmbeddingModel,
+		&i.EmbeddingRevision,
+	)
+	return i, err
+}
+
+const getGraphNodeEmbeddingText = `-- name: GetGraphNodeEmbeddingText :one
+select n.id, n.kind, n.revision,
+       cast(coalesce(v.data, n.data)->>'title' as text) as title,
+       cast(coalesce(v.data, n.data)->>'description' as text) as description
+from graph_nodes n
+left join graph_node_versions v on v.node_id = n.id and v.version = n.current_version
+where n.id = $1 and n.kind = $2
+`
+
+type GetGraphNodeEmbeddingTextParams struct {
+	ID   uuid.UUID `json:"id"`
+	Kind string    `json:"kind"`
+}
+
+type GetGraphNodeEmbeddingTextRow struct {
+	ID          uuid.UUID `json:"id"`
+	Kind        string    `json:"kind"`
+	Revision    int64     `json:"revision"`
+	Title       string    `json:"title"`
+	Description string    `json:"description"`
+}
+
+func (q *Queries) GetGraphNodeEmbeddingText(ctx context.Context, arg GetGraphNodeEmbeddingTextParams) (GetGraphNodeEmbeddingTextRow, error) {
+	row := q.db.QueryRow(ctx, getGraphNodeEmbeddingText, arg.ID, arg.Kind)
+	var i GetGraphNodeEmbeddingTextRow
+	err := row.Scan(
+		&i.ID,
+		&i.Kind,
+		&i.Revision,
+		&i.Title,
+		&i.Description,
 	)
 	return i, err
 }
 
 const getGraphNodeForUpdate = `-- name: GetGraphNodeForUpdate :one
-select id, kind, versioned, data, current_version, revision, created_at, updated_at
+select id, kind, versioned, data, current_version, revision, created_at, updated_at, title_embedding, description_embedding, embedding_model, embedding_revision
 from graph_nodes
 where id = $1 and kind = $2
 for update
@@ -207,6 +248,10 @@ func (q *Queries) GetGraphNodeForUpdate(ctx context.Context, arg GetGraphNodeFor
 		&i.Revision,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.TitleEmbedding,
+		&i.DescriptionEmbedding,
+		&i.EmbeddingModel,
+		&i.EmbeddingRevision,
 	)
 	return i, err
 }
@@ -353,7 +398,7 @@ func (q *Queries) InsertGraphEdgeType(ctx context.Context, arg InsertGraphEdgeTy
 const insertGraphNode = `-- name: InsertGraphNode :one
 insert into graph_nodes (id, kind, versioned, data, current_version)
 values ($1, $2, $3, $4, $5)
-returning id, kind, versioned, data, current_version, revision, created_at, updated_at
+returning id, kind, versioned, data, current_version, revision, created_at, updated_at, title_embedding, description_embedding, embedding_model, embedding_revision
 `
 
 type InsertGraphNodeParams struct {
@@ -382,6 +427,10 @@ func (q *Queries) InsertGraphNode(ctx context.Context, arg InsertGraphNodeParams
 		&i.Revision,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.TitleEmbedding,
+		&i.DescriptionEmbedding,
+		&i.EmbeddingModel,
+		&i.EmbeddingRevision,
 	)
 	return i, err
 }
@@ -596,11 +645,165 @@ func (q *Queries) ListGraphNodeVersions(ctx context.Context, arg ListGraphNodeVe
 	return items, nil
 }
 
+const listGraphNodesMissingEmbeddings = `-- name: ListGraphNodesMissingEmbeddings :many
+select id, kind as node_kind, revision
+from graph_nodes
+where title_embedding is null or description_embedding is null
+   or embedding_model is distinct from $1::text
+   or embedding_revision is distinct from revision
+limit $2
+`
+
+type ListGraphNodesMissingEmbeddingsParams struct {
+	Model string `json:"model"`
+	Lim   int32  `json:"lim"`
+}
+
+type ListGraphNodesMissingEmbeddingsRow struct {
+	ID       uuid.UUID `json:"id"`
+	NodeKind string    `json:"node_kind"`
+	Revision int64     `json:"revision"`
+}
+
+func (q *Queries) ListGraphNodesMissingEmbeddings(ctx context.Context, arg ListGraphNodesMissingEmbeddingsParams) ([]ListGraphNodesMissingEmbeddingsRow, error) {
+	rows, err := q.db.Query(ctx, listGraphNodesMissingEmbeddings, arg.Model, arg.Lim)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListGraphNodesMissingEmbeddingsRow{}
+	for rows.Next() {
+		var i ListGraphNodesMissingEmbeddingsRow
+		if err := rows.Scan(&i.ID, &i.NodeKind, &i.Revision); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const searchGraphNodes = `-- name: SearchGraphNodes :many
+select id, kind, revision, data, title, description, created_at, updated_at, score
+from (
+    select n.id, n.kind, n.revision, coalesce(v.data, n.data) as data,
+           cast(coalesce(v.data, n.data)->>'title' as text) as title,
+           cast(coalesce(v.data, n.data)->>'description' as text) as description,
+           n.created_at, n.updated_at,
+           (1 - least(n.title_embedding <=> $1::vector,
+                      n.description_embedding <=> $1::vector))::float8 as score,
+           least(n.title_embedding <=> $1::vector,
+                 n.description_embedding <=> $1::vector) as distance
+    from graph_nodes n
+    left join graph_node_versions v on v.node_id = n.id and v.version = n.current_version
+    where n.embedding_model = $2::text
+      and n.embedding_revision = n.revision
+      and n.title_embedding is not null and n.description_embedding is not null
+      and ($3::bool or n.kind = $4::text)
+) matches
+order by distance
+limit $5::int
+`
+
+type SearchGraphNodesParams struct {
+	Embedding pgvector.Vector `json:"embedding"`
+	Model     string          `json:"model"`
+	AllKinds  bool            `json:"all_kinds"`
+	Kind      string          `json:"kind"`
+	Lim       int32           `json:"lim"`
+}
+
+type SearchGraphNodesRow struct {
+	ID          uuid.UUID       `json:"id"`
+	Kind        string          `json:"kind"`
+	Revision    int64           `json:"revision"`
+	Data        json.RawMessage `json:"data"`
+	Title       string          `json:"title"`
+	Description string          `json:"description"`
+	CreatedAt   time.Time       `json:"created_at"`
+	UpdatedAt   time.Time       `json:"updated_at"`
+	Score       float64         `json:"score"`
+}
+
+func (q *Queries) SearchGraphNodes(ctx context.Context, arg SearchGraphNodesParams) ([]SearchGraphNodesRow, error) {
+	rows, err := q.db.Query(ctx, searchGraphNodes,
+		arg.Embedding,
+		arg.Model,
+		arg.AllKinds,
+		arg.Kind,
+		arg.Lim,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []SearchGraphNodesRow{}
+	for rows.Next() {
+		var i SearchGraphNodesRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Kind,
+			&i.Revision,
+			&i.Data,
+			&i.Title,
+			&i.Description,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.Score,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const setGraphNodeEmbeddings = `-- name: SetGraphNodeEmbeddings :execrows
+update graph_nodes
+set title_embedding = $1,
+    description_embedding = $2,
+    embedding_model = $3,
+    embedding_revision = $4
+where id = $5 and kind = $6 and revision = $7
+`
+
+type SetGraphNodeEmbeddingsParams struct {
+	TitleEmbedding       *pgvector.Vector `json:"title_embedding"`
+	DescriptionEmbedding *pgvector.Vector `json:"description_embedding"`
+	EmbeddingModel       *string          `json:"embedding_model"`
+	EmbeddingRevision    *int64           `json:"embedding_revision"`
+	ID                   uuid.UUID        `json:"id"`
+	Kind                 string           `json:"kind"`
+	Revision             int64            `json:"revision"`
+}
+
+func (q *Queries) SetGraphNodeEmbeddings(ctx context.Context, arg SetGraphNodeEmbeddingsParams) (int64, error) {
+	result, err := q.db.Exec(ctx, setGraphNodeEmbeddings,
+		arg.TitleEmbedding,
+		arg.DescriptionEmbedding,
+		arg.EmbeddingModel,
+		arg.EmbeddingRevision,
+		arg.ID,
+		arg.Kind,
+		arg.Revision,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const setGraphNodeVersion = `-- name: SetGraphNodeVersion :one
 update graph_nodes
-set current_version = $3, revision = revision + 1, updated_at = now()
+set current_version = $3, revision = revision + 1, updated_at = now(),
+    title_embedding = null, description_embedding = null, embedding_model = null, embedding_revision = null
 where id = $1 and kind = $2
-returning id, kind, versioned, data, current_version, revision, created_at, updated_at
+returning id, kind, versioned, data, current_version, revision, created_at, updated_at, title_embedding, description_embedding, embedding_model, embedding_revision
 `
 
 type SetGraphNodeVersionParams struct {
@@ -621,6 +824,10 @@ func (q *Queries) SetGraphNodeVersion(ctx context.Context, arg SetGraphNodeVersi
 		&i.Revision,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.TitleEmbedding,
+		&i.DescriptionEmbedding,
+		&i.EmbeddingModel,
+		&i.EmbeddingRevision,
 	)
 	return i, err
 }
@@ -664,9 +871,10 @@ func (q *Queries) UpdateGraphEdgeData(ctx context.Context, arg UpdateGraphEdgeDa
 
 const updateGraphNodeData = `-- name: UpdateGraphNodeData :one
 update graph_nodes
-set data = $3, revision = revision + 1, updated_at = now()
+set data = $3, revision = revision + 1, updated_at = now(),
+    title_embedding = null, description_embedding = null, embedding_model = null, embedding_revision = null
 where id = $1 and kind = $2
-returning id, kind, versioned, data, current_version, revision, created_at, updated_at
+returning id, kind, versioned, data, current_version, revision, created_at, updated_at, title_embedding, description_embedding, embedding_model, embedding_revision
 `
 
 type UpdateGraphNodeDataParams struct {
@@ -687,6 +895,10 @@ func (q *Queries) UpdateGraphNodeData(ctx context.Context, arg UpdateGraphNodeDa
 		&i.Revision,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.TitleEmbedding,
+		&i.DescriptionEmbedding,
+		&i.EmbeddingModel,
+		&i.EmbeddingRevision,
 	)
 	return i, err
 }

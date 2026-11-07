@@ -2,11 +2,15 @@ package app_test
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
+	"os"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
+	_ "github.com/jackc/pgx/v5/stdlib"
+	"github.com/pressly/goose/v3"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -57,31 +61,31 @@ func TestKnowledgeSchemaRegistration(t *testing.T) {
 		{name: "objective", run: func(t *testing.T) {
 			t.Helper()
 			roundTrip(t, a.Knowledge.Objectives, knowledge.Objective{
-				Title: "Improve retention", Description: "Keep useful institutional knowledge", SuccessCriteria: []string{"Answers cite sources"},
+				Details: knowledge.Details{Title: "Improve retention", Description: "Keep useful institutional knowledge"}, SuccessCriteria: []string{"Answers cite sources"},
 			}, func(value *knowledge.Objective) { value.Description = "Updated objective" })
 		}},
 		{name: "workflow", run: func(t *testing.T) {
 			t.Helper()
 			roundTrip(t, a.Knowledge.Workflows, knowledge.Workflow{
-				Name: "answer", Description: "Answer from knowledge", Graph: workflow.Graph{Nodes: []workflow.Node{{ID: "answer", Agent: "question"}}, Edges: []workflow.Edge{}},
+				Details: knowledge.Details{Title: "answer", Description: "Answer from knowledge"}, Graph: workflow.Graph{Nodes: []workflow.Node{{ID: "answer", Agent: "question"}}, Edges: []workflow.Edge{}},
 			}, func(value *knowledge.Workflow) { value.Description = "Updated workflow" })
 		}},
 		{name: "claim", run: func(t *testing.T) {
 			t.Helper()
-			roundTrip(t, a.Knowledge.Claims, knowledge.Claim{Text: "Postgres stores the knowledge graph"}, func(value *knowledge.Claim) {
-				value.Text = "Postgres and River store knowledge and jobs"
+			roundTrip(t, a.Knowledge.Claims, knowledge.Claim{Details: knowledge.Details{Title: "Postgres stores the knowledge graph", Description: "Storage architecture"}}, func(value *knowledge.Claim) {
+				value.Title = "Postgres and River store knowledge and jobs"
 			})
 		}},
 		{name: "source", run: func(t *testing.T) {
 			t.Helper()
 			roundTrip(t, a.Knowledge.Sources, knowledge.Source{
-				Title: "Architecture", URI: "https://example.com/architecture", ContentHash: "sha256:abc", Metadata: []byte(`{"publisher":"example"}`),
+				Details: knowledge.Details{Title: "Architecture", Description: "System architecture documentation"}, URI: "https://example.com/architecture", ContentHash: "sha256:abc", Metadata: []byte(`{"publisher":"example"}`),
 			}, func(value *knowledge.Source) { value.ContentHash = "sha256:def" })
 		}},
 		{name: "agent", run: func(t *testing.T) {
 			t.Helper()
 			roundTrip(t, a.Knowledge.Agents, knowledge.Agent{
-				Name: "question", SystemPrompt: "Answer from the graph", Model: "openai/gpt-5",
+				Details: knowledge.Details{Title: "question", Description: "Answer questions"}, SystemPrompt: "Answer from the graph", Model: "openai/gpt-5",
 				Config: domain.AgentConfig{MaxIterations: 5}, OutputSchema: []byte(`{"type":"object","properties":{"answer":{"type":"string"}}}`),
 			}, func(value *knowledge.Agent) { value.Notes = "Updated agent" })
 		}},
@@ -128,4 +132,61 @@ func assertDataEqual(t *testing.T, expected, actual any) {
 	got, err := json.Marshal(actual)
 	require.NoError(t, err)
 	assert.JSONEq(t, string(want), string(got))
+}
+
+func TestKnowledgeMigrationPreservesExistingNodes(t *testing.T) {
+	t.Parallel()
+	st, url := testdb.Open(t)
+	initial, err := app.New(context.Background(), config.Config{MCP: config.MCP{}, WorkspaceDir: t.TempDir()}, app.Options{Store: st})
+	require.NoError(t, err)
+	initial.Close(context.Background())
+
+	database, err := sql.Open("pgx", url)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, database.Close()) })
+	provider, err := goose.NewProvider(goose.DialectPostgres, database, os.DirFS("../store/migrations"))
+	require.NoError(t, err)
+	_, err = provider.Down(context.Background())
+	require.NoError(t, err)
+
+	tests := []struct {
+		kind       string
+		oldData    string
+		wantTitle  string
+		wantDesc   string
+		removedKey string
+	}{
+		{kind: "objective", oldData: `{"title":"Old objective","description":"Objective description","success_criteria":[]}`, wantTitle: "Old objective", wantDesc: "Objective description"},
+		{kind: "workflow", oldData: `{"name":"old-workflow","description":"Workflow description","graph":{"nodes":[{"id":"n","agent":"a"}],"edges":[]}}`, wantTitle: "old-workflow", wantDesc: "Workflow description", removedKey: "name"},
+		{kind: "claim", oldData: `{"text":"Old claim"}`, wantTitle: "Old claim", removedKey: "text"},
+		{kind: "source", oldData: `{"title":"Old source","uri":"https://example.com","content_hash":"sha256:old"}`, wantTitle: "Old source"},
+		{kind: "agent", oldData: `{"name":"old-agent","description":"Agent description","system_prompt":"Answer","model":"test/model","config":{},"notes":""}`, wantTitle: "old-agent", wantDesc: "Agent description", removedKey: "name"},
+	}
+	tx, err := database.BeginTx(context.Background(), nil)
+	require.NoError(t, err)
+	for _, tt := range tests {
+		id := uuid.New()
+		_, err = tx.ExecContext(context.Background(), `insert into graph_nodes (id, kind, versioned, current_version) values ($1, $2, true, 1)`, id, tt.kind)
+		require.NoError(t, err)
+		_, err = tx.ExecContext(context.Background(), `insert into graph_node_versions (node_id, version, data) values ($1, 1, $2)`, id, tt.oldData)
+		require.NoError(t, err)
+	}
+	require.NoError(t, tx.Commit())
+	_, err = provider.Up(context.Background())
+	require.NoError(t, err)
+
+	upgraded, err := app.New(context.Background(), config.Config{MCP: config.MCP{}, WorkspaceDir: t.TempDir()}, app.Options{Store: st})
+	require.NoError(t, err)
+	upgraded.Close(context.Background())
+	for _, tt := range tests {
+		var raw []byte
+		require.NoError(t, database.QueryRowContext(context.Background(), `select v.data from graph_node_versions v join graph_nodes n on n.id = v.node_id where n.kind = $1`, tt.kind).Scan(&raw))
+		var data map[string]any
+		require.NoError(t, json.Unmarshal(raw, &data))
+		assert.Equal(t, tt.wantTitle, data["title"], tt.kind)
+		assert.Equal(t, tt.wantDesc, data["description"], tt.kind)
+		if tt.removedKey != "" {
+			assert.NotContains(t, data, tt.removedKey, tt.kind)
+		}
+	}
 }

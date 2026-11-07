@@ -98,6 +98,11 @@ type VersionHistory[T any] struct {
 	NextBefore int64            `json:"next_before,omitempty"`
 }
 
+// TextData supplies the common text every node persists and embeds.
+type TextData interface {
+	NodeText() (title, description string)
+}
+
 // NodeEnricher processes a committed node revision. Implementations must be
 // idempotent because River may execute a job more than once.
 type NodeEnricher[T any] func(context.Context, Node[T]) error

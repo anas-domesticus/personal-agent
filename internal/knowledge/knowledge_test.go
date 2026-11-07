@@ -33,6 +33,57 @@ func TestKindConstants(t *testing.T) {
 	}
 }
 
+func TestDetailsValidate(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		in      knowledge.Details
+		wantErr string
+	}{
+		{name: "nonblank title", in: knowledge.Details{Title: "Research"}},
+		{name: "blank title", in: knowledge.Details{Title: " \t\n"}, wantErr: "title is required"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			err := tt.in.Validate()
+			if tt.wantErr != "" {
+				require.ErrorContains(t, err, tt.wantErr)
+				return
+			}
+			require.NoError(t, err)
+		})
+	}
+}
+
+func TestNodeText(t *testing.T) {
+	t.Parallel()
+
+	details := knowledge.Details{Title: "Research", Description: "Find supporting evidence."}
+	tests := []struct {
+		name string
+		in   interface {
+			NodeText() (string, string)
+		}
+	}{
+		{name: "details", in: details},
+		{name: "objective", in: knowledge.Objective{Details: details}},
+		{name: "workflow", in: knowledge.Workflow{Details: details}},
+		{name: "claim", in: knowledge.Claim{Details: details}},
+		{name: "source", in: knowledge.Source{Details: details}},
+		{name: "agent", in: knowledge.Agent{Details: details}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			title, description := tt.in.NodeText()
+			require.Equal(t, details.Title, title)
+			require.Equal(t, details.Description, description)
+		})
+	}
+}
+
 func TestObjectiveValidate(t *testing.T) {
 	t.Parallel()
 
@@ -41,8 +92,8 @@ func TestObjectiveValidate(t *testing.T) {
 		in      knowledge.Objective
 		wantErr string
 	}{
-		{name: "title", in: knowledge.Objective{Title: "Improve research"}},
-		{name: "blank title", in: knowledge.Objective{Title: " \t\n"}, wantErr: "title is required"},
+		{name: "title", in: knowledge.Objective{Details: knowledge.Details{Title: "Improve research"}}},
+		{name: "blank title", in: knowledge.Objective{Details: knowledge.Details{Title: " \t\n"}}, wantErr: "title is required"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -66,9 +117,9 @@ func TestWorkflowValidate(t *testing.T) {
 		in      knowledge.Workflow
 		wantErr string
 	}{
-		{name: "valid workflow", in: knowledge.Workflow{Name: "Research", Graph: validGraph}},
-		{name: "blank name", in: knowledge.Workflow{Name: " ", Graph: validGraph}, wantErr: "name is required"},
-		{name: "invalid graph", in: knowledge.Workflow{Name: "Research"}, wantErr: "graph has no nodes"},
+		{name: "valid workflow", in: knowledge.Workflow{Details: knowledge.Details{Title: "Research"}, Graph: validGraph}},
+		{name: "blank title", in: knowledge.Workflow{Details: knowledge.Details{Title: " "}, Graph: validGraph}, wantErr: "title is required"},
+		{name: "invalid graph", in: knowledge.Workflow{Details: knowledge.Details{Title: "Research"}}, wantErr: "graph has no nodes"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -91,8 +142,8 @@ func TestClaimValidate(t *testing.T) {
 		in      knowledge.Claim
 		wantErr string
 	}{
-		{name: "nonblank text", in: knowledge.Claim{Text: "The sky is blue."}},
-		{name: "blank text", in: knowledge.Claim{Text: " \t\n"}, wantErr: "text is required"},
+		{name: "nonblank title", in: knowledge.Claim{Details: knowledge.Details{Title: "The sky is blue."}}},
+		{name: "blank title", in: knowledge.Claim{Details: knowledge.Details{Title: " \t\n"}}, wantErr: "title is required"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -115,13 +166,13 @@ func TestSourceValidate(t *testing.T) {
 		in      knowledge.Source
 		wantErr string
 	}{
-		{name: "title", in: knowledge.Source{Title: "Documentation"}},
-		{name: "URI", in: knowledge.Source{URI: "https://example.com"}},
-		{name: "object metadata", in: knowledge.Source{Title: "Documentation", Metadata: json.RawMessage(`{"author":"Ada"}`)}},
-		{name: "missing title and URI", in: knowledge.Source{Title: " ", URI: "\t"}, wantErr: "title or uri is required"},
-		{name: "array metadata", in: knowledge.Source{Title: "Documentation", Metadata: json.RawMessage(`[]`)}, wantErr: "metadata must be a JSON object"},
-		{name: "null metadata", in: knowledge.Source{Title: "Documentation", Metadata: json.RawMessage(`null`)}, wantErr: "metadata must be a JSON object"},
-		{name: "malformed metadata", in: knowledge.Source{Title: "Documentation", Metadata: json.RawMessage(`{"author":`)}, wantErr: "metadata must be a JSON object"},
+		{name: "title", in: knowledge.Source{Details: knowledge.Details{Title: "Documentation"}}},
+		{name: "URI", in: knowledge.Source{Details: knowledge.Details{Title: "Documentation"}, URI: "https://example.com"}},
+		{name: "object metadata", in: knowledge.Source{Details: knowledge.Details{Title: "Documentation"}, Metadata: json.RawMessage(`{"author":"Ada"}`)}},
+		{name: "blank title with URI", in: knowledge.Source{Details: knowledge.Details{Title: " "}, URI: "https://example.com"}, wantErr: "title is required"},
+		{name: "array metadata", in: knowledge.Source{Details: knowledge.Details{Title: "Documentation"}, Metadata: json.RawMessage(`[]`)}, wantErr: "metadata must be a JSON object"},
+		{name: "null metadata", in: knowledge.Source{Details: knowledge.Details{Title: "Documentation"}, Metadata: json.RawMessage(`null`)}, wantErr: "metadata must be a JSON object"},
+		{name: "malformed metadata", in: knowledge.Source{Details: knowledge.Details{Title: "Documentation"}, Metadata: json.RawMessage(`{"author":`)}, wantErr: "metadata must be a JSON object"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -140,7 +191,7 @@ func TestAgentValidate(t *testing.T) {
 	t.Parallel()
 
 	valid := knowledge.Agent{
-		Name:         "Researcher",
+		Details:      knowledge.Details{Title: "Researcher"},
 		SystemPrompt: "Research the question.",
 		Model:        "openai/gpt-5",
 	}
@@ -153,7 +204,7 @@ func TestAgentValidate(t *testing.T) {
 		{name: "object output schema", change: func(a *knowledge.Agent) {
 			a.OutputSchema = json.RawMessage(`{"type":"object"}`)
 		}},
-		{name: "blank name", change: func(a *knowledge.Agent) { a.Name = " " }, wantErr: "name is required"},
+		{name: "blank title", change: func(a *knowledge.Agent) { a.Title = " " }, wantErr: "title is required"},
 		{name: "blank system prompt", change: func(a *knowledge.Agent) {
 			a.SystemPrompt = "\t"
 		}, wantErr: "system prompt is required"},

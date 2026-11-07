@@ -39,6 +39,72 @@ func (_m *MockStore) EXPECT() *MockStore_Expecter {
 	return &MockStore_Expecter{mock: &_m.Mock}
 }
 
+// GetGraphNodeEmbeddingText provides a mock function for the type MockStore
+func (_mock *MockStore) GetGraphNodeEmbeddingText(ctx context.Context, arg db.GetGraphNodeEmbeddingTextParams) (db.GetGraphNodeEmbeddingTextRow, error) {
+	ret := _mock.Called(ctx, arg)
+
+	if len(ret) == 0 {
+		panic("no return value specified for GetGraphNodeEmbeddingText")
+	}
+
+	var r0 db.GetGraphNodeEmbeddingTextRow
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context, db.GetGraphNodeEmbeddingTextParams) (db.GetGraphNodeEmbeddingTextRow, error)); ok {
+		return returnFunc(ctx, arg)
+	}
+	if returnFunc, ok := ret.Get(0).(func(context.Context, db.GetGraphNodeEmbeddingTextParams) db.GetGraphNodeEmbeddingTextRow); ok {
+		r0 = returnFunc(ctx, arg)
+	} else {
+		r0 = ret.Get(0).(db.GetGraphNodeEmbeddingTextRow)
+	}
+	if returnFunc, ok := ret.Get(1).(func(context.Context, db.GetGraphNodeEmbeddingTextParams) error); ok {
+		r1 = returnFunc(ctx, arg)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockStore_GetGraphNodeEmbeddingText_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'GetGraphNodeEmbeddingText'
+type MockStore_GetGraphNodeEmbeddingText_Call struct {
+	*mock.Call
+}
+
+// GetGraphNodeEmbeddingText is a helper method to define mock.On call
+//   - ctx context.Context
+//   - arg db.GetGraphNodeEmbeddingTextParams
+func (_e *MockStore_Expecter) GetGraphNodeEmbeddingText(ctx any, arg any) *MockStore_GetGraphNodeEmbeddingText_Call {
+	return &MockStore_GetGraphNodeEmbeddingText_Call{Call: _e.mock.On("GetGraphNodeEmbeddingText", ctx, arg)}
+}
+
+func (_c *MockStore_GetGraphNodeEmbeddingText_Call) Run(run func(ctx context.Context, arg db.GetGraphNodeEmbeddingTextParams)) *MockStore_GetGraphNodeEmbeddingText_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		var arg1 db.GetGraphNodeEmbeddingTextParams
+		if args[1] != nil {
+			arg1 = args[1].(db.GetGraphNodeEmbeddingTextParams)
+		}
+		run(
+			arg0,
+			arg1,
+		)
+	})
+	return _c
+}
+
+func (_c *MockStore_GetGraphNodeEmbeddingText_Call) Return(getGraphNodeEmbeddingTextRow db.GetGraphNodeEmbeddingTextRow, err error) *MockStore_GetGraphNodeEmbeddingText_Call {
+	_c.Call.Return(getGraphNodeEmbeddingTextRow, err)
+	return _c
+}
+
+func (_c *MockStore_GetGraphNodeEmbeddingText_Call) RunAndReturn(run func(ctx context.Context, arg db.GetGraphNodeEmbeddingTextParams) (db.GetGraphNodeEmbeddingTextRow, error)) *MockStore_GetGraphNodeEmbeddingText_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // GetWorkflowText provides a mock function for the type MockStore
 func (_mock *MockStore) GetWorkflowText(ctx context.Context, id uuid.UUID) (db.GetWorkflowTextRow, error) {
 	ret := _mock.Called(ctx, id)
@@ -101,6 +167,74 @@ func (_c *MockStore_GetWorkflowText_Call) Return(getWorkflowTextRow db.GetWorkfl
 }
 
 func (_c *MockStore_GetWorkflowText_Call) RunAndReturn(run func(ctx context.Context, id uuid.UUID) (db.GetWorkflowTextRow, error)) *MockStore_GetWorkflowText_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// ListGraphNodesMissingEmbeddings provides a mock function for the type MockStore
+func (_mock *MockStore) ListGraphNodesMissingEmbeddings(ctx context.Context, arg db.ListGraphNodesMissingEmbeddingsParams) ([]db.ListGraphNodesMissingEmbeddingsRow, error) {
+	ret := _mock.Called(ctx, arg)
+
+	if len(ret) == 0 {
+		panic("no return value specified for ListGraphNodesMissingEmbeddings")
+	}
+
+	var r0 []db.ListGraphNodesMissingEmbeddingsRow
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context, db.ListGraphNodesMissingEmbeddingsParams) ([]db.ListGraphNodesMissingEmbeddingsRow, error)); ok {
+		return returnFunc(ctx, arg)
+	}
+	if returnFunc, ok := ret.Get(0).(func(context.Context, db.ListGraphNodesMissingEmbeddingsParams) []db.ListGraphNodesMissingEmbeddingsRow); ok {
+		r0 = returnFunc(ctx, arg)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).([]db.ListGraphNodesMissingEmbeddingsRow)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func(context.Context, db.ListGraphNodesMissingEmbeddingsParams) error); ok {
+		r1 = returnFunc(ctx, arg)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockStore_ListGraphNodesMissingEmbeddings_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'ListGraphNodesMissingEmbeddings'
+type MockStore_ListGraphNodesMissingEmbeddings_Call struct {
+	*mock.Call
+}
+
+// ListGraphNodesMissingEmbeddings is a helper method to define mock.On call
+//   - ctx context.Context
+//   - arg db.ListGraphNodesMissingEmbeddingsParams
+func (_e *MockStore_Expecter) ListGraphNodesMissingEmbeddings(ctx any, arg any) *MockStore_ListGraphNodesMissingEmbeddings_Call {
+	return &MockStore_ListGraphNodesMissingEmbeddings_Call{Call: _e.mock.On("ListGraphNodesMissingEmbeddings", ctx, arg)}
+}
+
+func (_c *MockStore_ListGraphNodesMissingEmbeddings_Call) Run(run func(ctx context.Context, arg db.ListGraphNodesMissingEmbeddingsParams)) *MockStore_ListGraphNodesMissingEmbeddings_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		var arg1 db.ListGraphNodesMissingEmbeddingsParams
+		if args[1] != nil {
+			arg1 = args[1].(db.ListGraphNodesMissingEmbeddingsParams)
+		}
+		run(
+			arg0,
+			arg1,
+		)
+	})
+	return _c
+}
+
+func (_c *MockStore_ListGraphNodesMissingEmbeddings_Call) Return(listGraphNodesMissingEmbeddingsRows []db.ListGraphNodesMissingEmbeddingsRow, err error) *MockStore_ListGraphNodesMissingEmbeddings_Call {
+	_c.Call.Return(listGraphNodesMissingEmbeddingsRows, err)
+	return _c
+}
+
+func (_c *MockStore_ListGraphNodesMissingEmbeddings_Call) RunAndReturn(run func(ctx context.Context, arg db.ListGraphNodesMissingEmbeddingsParams) ([]db.ListGraphNodesMissingEmbeddingsRow, error)) *MockStore_ListGraphNodesMissingEmbeddings_Call {
 	_c.Call.Return(run)
 	return _c
 }
@@ -169,6 +303,72 @@ func (_c *MockStore_ListWorkflowsMissingEmbedding_Call) Return(uUIDs []uuid.UUID
 }
 
 func (_c *MockStore_ListWorkflowsMissingEmbedding_Call) RunAndReturn(run func(ctx context.Context, arg db.ListWorkflowsMissingEmbeddingParams) ([]uuid.UUID, error)) *MockStore_ListWorkflowsMissingEmbedding_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// SetGraphNodeEmbeddings provides a mock function for the type MockStore
+func (_mock *MockStore) SetGraphNodeEmbeddings(ctx context.Context, arg db.SetGraphNodeEmbeddingsParams) (int64, error) {
+	ret := _mock.Called(ctx, arg)
+
+	if len(ret) == 0 {
+		panic("no return value specified for SetGraphNodeEmbeddings")
+	}
+
+	var r0 int64
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context, db.SetGraphNodeEmbeddingsParams) (int64, error)); ok {
+		return returnFunc(ctx, arg)
+	}
+	if returnFunc, ok := ret.Get(0).(func(context.Context, db.SetGraphNodeEmbeddingsParams) int64); ok {
+		r0 = returnFunc(ctx, arg)
+	} else {
+		r0 = ret.Get(0).(int64)
+	}
+	if returnFunc, ok := ret.Get(1).(func(context.Context, db.SetGraphNodeEmbeddingsParams) error); ok {
+		r1 = returnFunc(ctx, arg)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockStore_SetGraphNodeEmbeddings_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'SetGraphNodeEmbeddings'
+type MockStore_SetGraphNodeEmbeddings_Call struct {
+	*mock.Call
+}
+
+// SetGraphNodeEmbeddings is a helper method to define mock.On call
+//   - ctx context.Context
+//   - arg db.SetGraphNodeEmbeddingsParams
+func (_e *MockStore_Expecter) SetGraphNodeEmbeddings(ctx any, arg any) *MockStore_SetGraphNodeEmbeddings_Call {
+	return &MockStore_SetGraphNodeEmbeddings_Call{Call: _e.mock.On("SetGraphNodeEmbeddings", ctx, arg)}
+}
+
+func (_c *MockStore_SetGraphNodeEmbeddings_Call) Run(run func(ctx context.Context, arg db.SetGraphNodeEmbeddingsParams)) *MockStore_SetGraphNodeEmbeddings_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		var arg1 db.SetGraphNodeEmbeddingsParams
+		if args[1] != nil {
+			arg1 = args[1].(db.SetGraphNodeEmbeddingsParams)
+		}
+		run(
+			arg0,
+			arg1,
+		)
+	})
+	return _c
+}
+
+func (_c *MockStore_SetGraphNodeEmbeddings_Call) Return(n int64, err error) *MockStore_SetGraphNodeEmbeddings_Call {
+	_c.Call.Return(n, err)
+	return _c
+}
+
+func (_c *MockStore_SetGraphNodeEmbeddings_Call) RunAndReturn(run func(ctx context.Context, arg db.SetGraphNodeEmbeddingsParams) (int64, error)) *MockStore_SetGraphNodeEmbeddings_Call {
 	_c.Call.Return(run)
 	return _c
 }

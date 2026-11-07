@@ -83,7 +83,7 @@ func (r *NodeRepository[T]) Upsert(ctx context.Context, id uuid.UUID, data T, op
 			if err != nil {
 				return err
 			}
-			return r.graph.queue(ctx, tx, EnrichmentArgs{Entity: EntityNode, Type: r.kind, ID: id, Revision: out.Revision})
+			return r.graph.queueNode(ctx, tx, EnrichmentArgs{Entity: EntityNode, Type: r.kind, ID: id, Revision: out.Revision})
 		}
 		if err != nil {
 			return fmt.Errorf("lock graph node: %w", err)
@@ -110,7 +110,7 @@ func (r *NodeRepository[T]) Upsert(ctx context.Context, id uuid.UUID, data T, op
 		if err != nil {
 			return err
 		}
-		return r.graph.queue(ctx, tx, EnrichmentArgs{Entity: EntityNode, Type: r.kind, ID: id, Revision: out.Revision})
+		return r.graph.queueNode(ctx, tx, EnrichmentArgs{Entity: EntityNode, Type: r.kind, ID: id, Revision: out.Revision})
 	})
 	return out, err
 }
@@ -157,7 +157,7 @@ func (r *NodeRepository[T]) appendVersion(ctx context.Context, q *db.Queries, tx
 	if err != nil {
 		return err
 	}
-	return r.graph.queue(ctx, tx, EnrichmentArgs{Entity: EntityNode, Type: r.kind, ID: row.ID, Revision: out.Revision})
+	return r.graph.queueNode(ctx, tx, EnrichmentArgs{Entity: EntityNode, Type: r.kind, ID: row.ID, Revision: out.Revision})
 }
 
 // Delete removes a node. Postgres rejects deletion while edges reference it.
@@ -287,7 +287,7 @@ func (r *VersionedNodeRepository[T]) Rollback(ctx context.Context, id uuid.UUID,
 		if err != nil {
 			return err
 		}
-		return r.graph.queue(ctx, tx, EnrichmentArgs{Entity: EntityNode, Type: r.kind, ID: id, Revision: updated.Revision})
+		return r.graph.queueNode(ctx, tx, EnrichmentArgs{Entity: EntityNode, Type: r.kind, ID: id, Revision: updated.Revision})
 	})
 	return out, err
 }
@@ -295,4 +295,28 @@ func (r *VersionedNodeRepository[T]) Rollback(ctx context.Context, id uuid.UUID,
 func currentRaw[T any](node Node[T]) json.RawMessage {
 	raw, _ := json.Marshal(node.Data)
 	return raw
+}
+
+func knowledgeNode[T TextData](node Node[T]) (domain.KnowledgeNode, error) {
+	raw, err := json.Marshal(node.Data)
+	if err != nil {
+		return domain.KnowledgeNode{}, fmt.Errorf("encode graph node: %w", err)
+	}
+	title, description := node.Data.NodeText()
+	return domain.KnowledgeNode{
+		ID: node.ID, Kind: node.Kind, Revision: node.Revision,
+		Title: title, Description: description, Data: raw,
+		CreatedAt: node.CreatedAt, UpdatedAt: node.UpdatedAt,
+	}, nil
+}
+
+// UpsertNode writes raw data through the typed repository registered for kind.
+func (g *Graph) UpsertNode(ctx context.Context, kind string, id uuid.UUID, raw json.RawMessage, opts NodeWriteOptions) (domain.KnowledgeNode, error) {
+	g.mu.RLock()
+	registered, ok := g.nodes[kind]
+	g.mu.RUnlock()
+	if !ok {
+		return domain.KnowledgeNode{}, fmt.Errorf("graph node kind %q: %w", kind, domain.ErrNotFound)
+	}
+	return registered.upsert(ctx, id, raw, opts)
 }

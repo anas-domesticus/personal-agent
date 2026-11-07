@@ -17,6 +17,7 @@ import (
 	"sort"
 	"sync"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/riverqueue/river"
@@ -47,6 +48,7 @@ type Graph struct {
 type registeredNode struct {
 	definition NodeType
 	enrich     func(context.Context, Node[json.RawMessage]) error
+	upsert     func(context.Context, uuid.UUID, json.RawMessage, NodeWriteOptions) (domain.KnowledgeNode, error)
 }
 
 type registeredEdge struct {
@@ -90,8 +92,17 @@ func (g *Graph) EdgeTypes() []EdgeType {
 }
 
 func decode[T any](raw json.RawMessage) (T, error) {
-	var out T
+	return decodeUsing[T](json.NewDecoder(bytes.NewReader(raw)))
+}
+
+func decodeStrict[T any](raw json.RawMessage) (T, error) {
 	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	return decodeUsing[T](decoder)
+}
+
+func decodeUsing[T any](decoder *json.Decoder) (T, error) {
+	var out T
 	if err := decoder.Decode(&out); err != nil {
 		return out, fmt.Errorf("decode graph data: %w", err)
 	}
