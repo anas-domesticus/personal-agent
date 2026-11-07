@@ -11,9 +11,16 @@ import (
 )
 
 const (
-	defaultNodeListLimit = 10
-	maxNodeListLimit     = 100
+	defaultNodeLimit = 10
+	maxNodeLimit     = 100
 )
+
+func nodeLimit(limit int32) int32 {
+	if limit <= 0 {
+		return defaultNodeLimit
+	}
+	return min(limit, maxNodeLimit)
+}
 
 // GetNode returns the current raw data for a registered node kind.
 func (g *Graph) GetNode(ctx context.Context, kind string, id uuid.UUID) (domain.KnowledgeNode, error) {
@@ -37,10 +44,7 @@ func (g *Graph) ListNodes(ctx context.Context, kind string, limit int32) ([]doma
 	if kind != "" && !g.hasNodeKind(kind) {
 		return nil, fmt.Errorf("graph node kind %q: %w", kind, domain.ErrNotFound)
 	}
-	if limit <= 0 {
-		limit = defaultNodeListLimit
-	}
-	limit = min(limit, maxNodeListLimit)
+	limit = nodeLimit(limit)
 	rows, err := g.store.ListGraphNodes(ctx, db.ListGraphNodesParams{
 		AllKinds: kind == "", Kind: kind, Lim: limit,
 	})

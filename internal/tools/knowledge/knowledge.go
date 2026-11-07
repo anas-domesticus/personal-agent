@@ -38,7 +38,7 @@ func Tools(store Store) ([]tool.InvokableTool, error) {
 		},
 		func() (tool.InvokableTool, error) {
 			return kit.New("search_knowledge_nodes", searchDesc, func(ctx context.Context, in searchInput) (searchOutput, error) {
-				nodes, err := store.Search(ctx, in.Kind, in.Query, boundedLimit(in.Limit))
+				nodes, err := store.Search(ctx, in.Kind, in.Query, in.Limit)
 				return searchOutput{Nodes: nodes}, err
 			})
 		},
@@ -81,11 +81,4 @@ type searchInput struct {
 
 type searchOutput struct {
 	Nodes []domain.KnowledgeNodeMatch `json:"nodes"`
-}
-
-func boundedLimit(limit int32) int32 {
-	if limit <= 0 {
-		return 10
-	}
-	return min(limit, 100)
 }

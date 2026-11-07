@@ -72,7 +72,7 @@ func registerKnowledgeTools(s *mcp.Server, knowledge Knowledge) {
 		return object(node)
 	})
 	add(s, "list_knowledge_nodes", "List current knowledge nodes in deterministic creation order, optionally filtered by kind.", readOnly, func(ctx context.Context, in listKnowledgeNodesInput) (knowledgeNodesOutput, error) {
-		out, err := knowledge.List(ctx, in.Kind, boundedLimit(in.Limit))
+		out, err := knowledge.List(ctx, in.Kind, in.Limit)
 		if err != nil {
 			return knowledgeNodesOutput{}, err
 		}
@@ -100,7 +100,7 @@ func registerKnowledgeTools(s *mcp.Server, knowledge Knowledge) {
 		return object(node)
 	})
 	add(s, "search_knowledge_nodes", "Find current knowledge nodes by semantic similarity to their titles and descriptions.", readOnly, func(ctx context.Context, in searchKnowledgeNodesInput) (knowledgeNodeMatchesOutput, error) {
-		out, err := knowledge.Search(ctx, in.Kind, in.Query, boundedLimit(in.Limit))
+		out, err := knowledge.Search(ctx, in.Kind, in.Query, in.Limit)
 		if err != nil {
 			return knowledgeNodeMatchesOutput{}, err
 		}

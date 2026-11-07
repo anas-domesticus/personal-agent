@@ -144,11 +144,11 @@ func TestSearchKnowledgeNodes(t *testing.T) {
 		want      []domain.KnowledgeNodeMatch
 		wantErr   string
 	}{
-		{name: "default limit", args: map[string]any{"kind": "objective", "query": "gardening"}, wantLimit: 10, response: matches, want: matches},
+		{name: "default limit passed to service", args: map[string]any{"kind": "objective", "query": "gardening"}, wantLimit: 0, response: matches, want: matches},
 		{name: "explicit limit", args: map[string]any{"query": "gardening", "limit": 3}, wantLimit: 3, response: []domain.KnowledgeNodeMatch{}, want: []domain.KnowledgeNodeMatch{}},
-		{name: "caps limit", args: map[string]any{"query": "gardening", "limit": 101}, wantLimit: 100, response: []domain.KnowledgeNodeMatch{}, want: []domain.KnowledgeNodeMatch{}},
-		{name: "negative limit uses default", args: map[string]any{"query": "gardening", "limit": -1}, wantLimit: 10, response: []domain.KnowledgeNodeMatch{}, want: []domain.KnowledgeNodeMatch{}},
-		{name: "service error", args: map[string]any{"query": "gardening"}, wantLimit: 10, err: errors.New("embedding unavailable"), wantErr: "embedding unavailable"},
+		{name: "limit cap passed to service", args: map[string]any{"query": "gardening", "limit": 101}, wantLimit: 101, response: []domain.KnowledgeNodeMatch{}, want: []domain.KnowledgeNodeMatch{}},
+		{name: "negative limit passed to service", args: map[string]any{"query": "gardening", "limit": -1}, wantLimit: -1, response: []domain.KnowledgeNodeMatch{}, want: []domain.KnowledgeNodeMatch{}},
+		{name: "service error", args: map[string]any{"query": "gardening"}, wantLimit: 0, err: errors.New("embedding unavailable"), wantErr: "embedding unavailable"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

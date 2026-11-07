@@ -42,7 +42,7 @@ func TestKnowledgeReadTools(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, invalid.IsError)
 
-	knowledge.EXPECT().List(mock.Anything, "", int32(10)).Return([]domain.KnowledgeNode{node}, nil).Once()
+	knowledge.EXPECT().List(mock.Anything, "", int32(0)).Return([]domain.KnowledgeNode{node}, nil).Once()
 	listed, err := session.CallTool(context.Background(), &mcp.CallToolParams{
 		Name: "list_knowledge_nodes", Arguments: map[string]any{},
 	})
@@ -52,7 +52,7 @@ func TestKnowledgeReadTools(t *testing.T) {
 	require.Len(t, nodes, 1)
 	assert.Equal(t, id.String(), nodes[0].(map[string]any)["id"])
 
-	knowledge.EXPECT().List(mock.Anything, "claim", int32(100)).Return([]domain.KnowledgeNode{}, nil).Once()
+	knowledge.EXPECT().List(mock.Anything, "claim", int32(1000)).Return([]domain.KnowledgeNode{}, nil).Once()
 	capped, err := session.CallTool(context.Background(), &mcp.CallToolParams{
 		Name: "list_knowledge_nodes", Arguments: map[string]any{"kind": "claim", "limit": 1000},
 	})
@@ -84,7 +84,7 @@ func TestKnowledgeTools(t *testing.T) {
 	require.False(t, upserted.IsError)
 	assert.Equal(t, "Grow herbs", structured(t, upserted)["title"])
 
-	knowledge.EXPECT().Search(mock.Anything, "objective", "gardening", int32(10)).Return([]domain.KnowledgeNodeMatch{{KnowledgeNode: node, Score: 0.9}}, nil).Once()
+	knowledge.EXPECT().Search(mock.Anything, "objective", "gardening", int32(0)).Return([]domain.KnowledgeNodeMatch{{KnowledgeNode: node, Score: 0.9}}, nil).Once()
 	searched, err := session.CallTool(context.Background(), &mcp.CallToolParams{
 		Name: "search_knowledge_nodes", Arguments: map[string]any{"kind": "objective", "query": "gardening"},
 	})

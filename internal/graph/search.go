@@ -20,10 +20,7 @@ func (g *Graph) SearchNodes(ctx context.Context, kind string, embedding pgvector
 			return nil, fmt.Errorf("graph node kind %q: %w", kind, domain.ErrNotFound)
 		}
 	}
-	if limit <= 0 {
-		limit = 10
-	}
-	limit = min(limit, 100)
+	limit = nodeLimit(limit)
 	rows, err := g.store.SearchGraphNodes(ctx, db.SearchGraphNodesParams{
 		Embedding: embedding, Model: model, AllKinds: kind == "", Kind: kind, Lim: limit,
 	})
