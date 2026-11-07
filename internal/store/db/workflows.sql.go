@@ -78,6 +78,18 @@ func (q *Queries) CreateWorkflowVersion(ctx context.Context, arg CreateWorkflowV
 	return i, err
 }
 
+const deleteWorkflowByName = `-- name: DeleteWorkflowByName :execrows
+delete from workflows where name = $1
+`
+
+func (q *Queries) DeleteWorkflowByName(ctx context.Context, name string) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteWorkflowByName, name)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const getWorkflowByName = `-- name: GetWorkflowByName :one
 select id, name, description, current_version, embedding_model, created_at, updated_at
 from workflows

@@ -2,7 +2,6 @@ package embed_test
 
 import (
 	"context"
-	"encoding/json"
 	"sync"
 	"testing"
 	"time"
@@ -62,34 +61,20 @@ func TestSweepEmbedsMissingRows(t *testing.T) {
 
 	w, err := st.CreateWorkflow(ctx, db.CreateWorkflowParams{Name: "evening-lights", Description: "Turn on the hall lights at sunset"})
 	require.NoError(t, err)
-	m, err := st.CreateMemory(ctx, db.CreateMemoryParams{Content: "The boiler struggles below -2C", Tags: []string{}, Metadata: json.RawMessage(`{}`)})
-	require.NoError(t, err)
-
 	client := startRiver(t, st.Pool, st.Queries, embedder(t))
 
-	// The sweep runs on start, queues one job per row, and both get embedded.
+	// The sweep runs on start, queues a workflow job, and embeds the row.
 	// The condition runs on another goroutine, so a read error stops the
 	// wait and is checked afterwards.
-	var readErr error
+	var (
+		readErr error
+		wf      db.GetWorkflowByNameRow
+	)
 	waitFor(t, func() bool {
-		var (
-			wf  db.GetWorkflowByNameRow
-			mem db.GetMemoryRow
-		)
-		if wf, readErr = st.GetWorkflowByName(ctx, w.Name); readErr != nil {
-			return true
-		}
-		if mem, readErr = st.GetMemory(ctx, m.ID); readErr != nil {
-			return true
-		}
-		return wf.EmbeddingModel != nil && *wf.EmbeddingModel == "test-model" &&
-			mem.EmbeddingModel != nil && *mem.EmbeddingModel == "test-model"
+		wf, readErr = st.GetWorkflowByName(ctx, w.Name)
+		return readErr != nil || wf.EmbeddingModel != nil && *wf.EmbeddingModel == "test-model"
 	}, "rows not embedded in time")
 	require.NoError(t, readErr)
-
-	missing, err := st.ListMemoriesMissingEmbedding(ctx, db.ListMemoriesMissingEmbeddingParams{Model: "test-model", Lim: 10})
-	require.NoError(t, err)
-	assert.Empty(t, missing, "still missing")
 
 	// An edit after a completed embed job must be embedded again, even
 	// though the completed job is still in the queue table. (River records
@@ -115,10 +100,10 @@ func waitFor(t *testing.T, cond func() bool, msg string) {
 }
 
 // changingStore changes a workflow's description the first time it is
-// embedded, as a concurrent edit would. It is a fake rather than a mock
-// because it wraps the real Postgres store and injects a race into it.
+// embedded, as a concurrent edit would. It wraps the real Postgres store
+// directly and injects a race into it.
 type changingStore struct {
-	embed.Store
+	*db.Queries
 	once sync.Once
 	edit func()
 }
@@ -127,7 +112,7 @@ var _ embed.Store = (*changingStore)(nil)
 
 func (c *changingStore) SetWorkflowEmbedding(ctx context.Context, p db.SetWorkflowEmbeddingParams) (int64, error) {
 	c.once.Do(c.edit)
-	return c.Store.SetWorkflowEmbedding(ctx, p)
+	return c.Queries.SetWorkflowEmbedding(ctx, p)
 }
 
 func TestEditDuringEmbedIsEmbedded(t *testing.T) {
@@ -135,7 +120,7 @@ func TestEditDuringEmbedIsEmbedded(t *testing.T) {
 	ctx := context.Background()
 	w, err := st.CreateWorkflow(ctx, db.CreateWorkflowParams{Name: "plants", Description: "Water the plants"})
 	require.NoError(t, err)
-	store := &changingStore{Store: st.Queries, edit: func() {
+	store := &changingStore{Queries: st.Queries, edit: func() {
 		// Runs on a River worker goroutine, so it reports rather than stops.
 		assert.NoError(t, st.UpdateWorkflowDescription(ctx, db.UpdateWorkflowDescriptionParams{ID: w.ID, Description: "Water the plants twice a week"}))
 	}}

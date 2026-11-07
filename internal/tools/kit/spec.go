@@ -18,8 +18,6 @@ type Spec struct {
 	Name string
 	// Summary is one line for list_tools.
 	Summary string
-	// Admin tools are only given to admin agents.
-	Admin bool
 	// Settings returns a pointer to a new zero value of the tool's settings,
 	// or is nil if the tool takes none. Settings are decoded strictly.
 	Settings func() any

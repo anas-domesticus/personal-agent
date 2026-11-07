@@ -24,10 +24,10 @@ import (
 var _ tools.MCPSource = (*toolsmcp.Set)(nil)
 
 // names returns the names of the tools a config resolves to.
-func names(t *testing.T, r *tools.Toolset, cfg domain.ToolConfig, admin bool) []string {
+func names(t *testing.T, r *tools.Toolset, cfg domain.ToolConfig) []string {
 	t.Helper()
 	out := []string{}
-	for _, tl := range r.For(cfg, admin) {
+	for _, tl := range r.For(cfg) {
 		out = append(out, kit.Name(tl))
 	}
 	return out
@@ -53,8 +53,7 @@ func (s *limitSettings) Validate() error {
 	return nil
 }
 
-// fixture is a registry of current_time, a "limited" tool with settings, and
-// the create_agent admin tool, over a mocked MCP source.
+// fixture is a registry of current_time and a limited tool with settings.
 type fixture struct {
 	reg   *tools.Registry
 	ts    *tools.Toolset
@@ -77,14 +76,9 @@ func newFixture(t *testing.T) *fixture {
 		},
 	}, kit.Spec{Name: "subagent", Summary: "Built by the agent builder."}) // no constructor
 
-	adminSpecs, err := kit.Specs([]tool.InvokableTool{namedTool(t, "create_agent")}, nil)
+	f.reg, err = tools.New(general, f.mcp)
 	require.NoError(t, err)
-	adminSpecs[0].Admin = true
-
-	f.reg, err = tools.New(general, []string{"create_agent"}, f.mcp)
-	require.NoError(t, err)
-	f.ts, err = f.reg.WithAdmin(adminSpecs)
-	require.NoError(t, err)
+	f.ts = f.reg.NewToolset()
 	return f
 }
 
@@ -94,61 +88,17 @@ func TestNew(t *testing.T) {
 	tests := []struct {
 		name    string
 		general []kit.Spec
-		admin   []string
 		wantErr string
 	}{
-		{name: "valid", general: []kit.Spec{plain}, admin: []string{"create_agent"}},
-		{name: "admin spec", general: []kit.Spec{{Name: "x", Admin: true}}, wantErr: "admin tools go through WithAdmin"},
+		{name: "valid", general: []kit.Spec{plain}},
 		{name: "mcp prefix", general: []kit.Spec{{Name: "mcp:x"}}, wantErr: "uses MCP naming"},
 		{name: "mcp separator", general: []kit.Spec{{Name: "a__b"}}, wantErr: "uses MCP naming"},
-		{name: "general and admin", general: []kit.Spec{plain}, admin: []string{"plain"}, wantErr: "both general and admin"},
 		{name: "duplicate", general: []kit.Spec{plain, plain}, wantErr: `duplicate tool "plain"`},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			_, err := tools.New(tt.general, tt.admin, tools.NewMockMCPSource(t))
-			if tt.wantErr != "" {
-				require.ErrorContains(t, err, tt.wantErr)
-				return
-			}
-			require.NoError(t, err)
-		})
-	}
-}
-
-func TestWithAdmin(t *testing.T) {
-	t.Parallel()
-	adminSpec := func(name string) kit.Spec {
-		s := kit.Static("x", namedTool(t, name))
-		s.Admin = true
-		return s
-	}
-	tests := []struct {
-		name    string
-		admin   []kit.Spec
-		wantErr string
-	}{
-		{name: "matching", admin: []kit.Spec{adminSpec("create_agent")}},
-		{name: "not marked admin", admin: []kit.Spec{kit.Static("x", namedTool(t, "create_agent"))}, wantErr: "is not marked admin"},
-		{name: "general name", admin: []kit.Spec{adminSpec("plain")}, wantErr: "both general and admin"},
-		{name: "mcp name", admin: []kit.Spec{adminSpec("a__b")}, wantErr: "both general and admin"},
-		{name: "missing admin tool", admin: nil, wantErr: "don't match the registry's admin names"},
-		{name: "extra admin tool", admin: []kit.Spec{adminSpec("create_agent"), adminSpec("other")}, wantErr: "don't match"},
-		{
-			name: "constructor fails",
-			admin: []kit.Spec{{Name: "create_agent", Admin: true, New: func(any) (tool.InvokableTool, error) {
-				return nil, errors.New("cannot build")
-			}}},
-			wantErr: "cannot build",
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			reg, err := tools.New([]kit.Spec{{Name: "plain"}}, []string{"create_agent"}, tools.NewMockMCPSource(t))
-			require.NoError(t, err)
-			_, err = reg.WithAdmin(tt.admin)
+			_, err := tools.New(tt.general, tools.NewMockMCPSource(t))
 			if tt.wantErr != "" {
 				require.ErrorContains(t, err, tt.wantErr)
 				return
@@ -174,8 +124,6 @@ func TestCheck(t *testing.T) {
 		{name: "invalid settings", tool: "limited", value: `{"limit": -1}`, wantErr: "must not be negative"},
 		{name: "unknown setting", tool: "limited", value: `{"limt": 3}`, wantErr: "unknown field"},
 		{name: "settings off ignores settings", tool: "limited", value: "false"},
-		{name: "admin tool turned on", tool: "create_agent", value: "true", wantErr: "come from the admin flag"},
-		{name: "admin tool turned off", tool: "create_agent", value: "false"},
 		{name: "unknown tool", tool: "no_such_tool", value: "true", wantErr: "unknown tool"},
 		{
 			name: "mcp server", tool: "mcp:srv", value: "true",
@@ -236,7 +184,6 @@ func TestFor(t *testing.T) {
 	tests := []struct {
 		name  string
 		cfg   domain.ToolConfig
-		admin bool
 		setup func(t *testing.T, m *tools.MockMCPSource)
 		want  []string
 	}{
@@ -267,16 +214,6 @@ func TestFor(t *testing.T) {
 			},
 			want: []string{"current_time"},
 		},
-		{name: "admin tools come with the flag", cfg: nil, admin: true, want: []string{"create_agent"}},
-		{name: "admin tools can be turned off", cfg: domain.ToolConfig{"create_agent": json.RawMessage("false")}, admin: true, want: []string{}},
-		{
-			name: "non-admin agents never get admin tools", cfg: domain.On("create_agent"),
-			setup: func(t *testing.T, m *tools.MockMCPSource) {
-				t.Helper()
-				m.EXPECT().Tool("create_agent").Return(nil, false).Once()
-			},
-			want: []string{},
-		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -285,7 +222,7 @@ func TestFor(t *testing.T) {
 			if tt.setup != nil {
 				tt.setup(t, f.mcp)
 			}
-			assert.ElementsMatch(t, tt.want, names(t, f.ts, tt.cfg, tt.admin))
+			assert.ElementsMatch(t, tt.want, names(t, f.ts, tt.cfg))
 		})
 	}
 }
@@ -304,7 +241,7 @@ func TestForBuildsWithSettings(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			f := newFixture(t)
-			assert.Equal(t, []string{"limited"}, names(t, f.ts, tt.cfg, false))
+			assert.Equal(t, []string{"limited"}, names(t, f.ts, tt.cfg))
 			assert.Equal(t, tt.wantLimit, <-f.built)
 		})
 	}
@@ -353,10 +290,9 @@ func TestRegistryWithMCPServer(t *testing.T) {
 	}})
 	t.Cleanup(set.Close)
 
-	reg, err := tools.New(nil, nil, set)
+	reg, err := tools.New(nil, set)
 	require.NoError(t, err)
-	ts, err := reg.WithAdmin(nil)
-	require.NoError(t, err)
+	ts := reg.NewToolset()
 
 	t.Run("check", func(t *testing.T) {
 		t.Parallel()
@@ -367,7 +303,7 @@ func TestRegistryWithMCPServer(t *testing.T) {
 	})
 	t.Run("for", func(t *testing.T) {
 		t.Parallel()
-		assert.ElementsMatch(t, []string{"srv__alpha", "srv__beta"}, names(t, ts, domain.On("mcp:srv", "srv__alpha"), false))
+		assert.ElementsMatch(t, []string{"srv__alpha", "srv__beta"}, names(t, ts, domain.On("mcp:srv", "srv__alpha")))
 	})
 	t.Run("assignable", func(t *testing.T) {
 		t.Parallel()

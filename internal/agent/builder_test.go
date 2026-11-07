@@ -25,9 +25,9 @@ func TestBuildSpec(t *testing.T) {
 
 	id := uuid.New()
 	temp := float32(0.3)
-	stored := func(admin bool) domain.AgentDetail {
+	stored := func() domain.AgentDetail {
 		return domain.AgentDetail{
-			Agent: domain.Agent{ID: id, Name: "triager", Description: "ranks", Admin: admin},
+			Agent: domain.Agent{ID: id, Name: "triager", Description: "ranks"},
 			Current: &domain.AgentVersion{
 				Version: 3, SystemPrompt: "Rank.", Model: "openai/gpt-5-mini",
 				Config:       domain.AgentConfig{Temperature: &temp, Tools: domain.On("current_time")},
@@ -70,8 +70,8 @@ func TestBuildSpec(t *testing.T) {
 			name: "stored agent",
 			spec: domain.SubagentSpec{Agent: "triager"},
 			setup: func(src *agent.MockSource, ts *agent.MockToolset) {
-				src.EXPECT().Get(mock.Anything, "triager").Return(stored(false), nil).Once()
-				ts.EXPECT().For(domain.On("current_time"), false).Return(nil).Once()
+				src.EXPECT().Get(mock.Anything, "triager").Return(stored(), nil).Once()
+				ts.EXPECT().For(domain.On("current_time")).Return(nil).Once()
 			},
 			wantInfo: agent.Info{Name: "triager", AgentID: id, Version: 3, Model: "openai/gpt-5-mini",
 				OutputSchema: json.RawMessage(`{"type":"object"}`)},
@@ -81,42 +81,29 @@ func TestBuildSpec(t *testing.T) {
 			name: "stored agent on another model",
 			spec: domain.SubagentSpec{Agent: "triager", Model: "deepseek/deepseek-v4.1-flash"},
 			setup: func(src *agent.MockSource, ts *agent.MockToolset) {
-				src.EXPECT().Get(mock.Anything, "triager").Return(stored(false), nil).Once()
-				ts.EXPECT().For(domain.On("current_time"), false).Return(nil).Once()
+				src.EXPECT().Get(mock.Anything, "triager").Return(stored(), nil).Once()
+				ts.EXPECT().For(domain.On("current_time")).Return(nil).Once()
 			},
 			wantInfo: agent.Info{Name: "triager", AgentID: id, Version: 3, Model: "deepseek/deepseek-v4.1-flash",
 				OutputSchema: json.RawMessage(`{"type":"object"}`)},
 			wantModel: llm.Spec{Model: "deepseek/deepseek-v4.1-flash", Temperature: &temp},
 		},
 		{
-			name: "admin agent at the top level gets admin tools",
-			spec: domain.SubagentSpec{Agent: "triager"},
-			setup: func(src *agent.MockSource, ts *agent.MockToolset) {
-				src.EXPECT().Get(mock.Anything, "triager").Return(stored(true), nil).Once()
-				ts.EXPECT().For(domain.On("current_time"), true).Return(nil).Once()
-			},
-			wantInfo: agent.Info{Name: "triager", AgentID: id, Version: 3, Model: "openai/gpt-5-mini",
-				OutputSchema: json.RawMessage(`{"type":"object"}`)},
-			wantModel: llm.Spec{Model: "openai/gpt-5-mini", Temperature: &temp},
-		},
-		{
-			name:  "admin agent as a subagent doesn't",
-			spec:  domain.SubagentSpec{Agent: "triager"},
+			name:  "ad-hoc worker",
+			spec:  domain.SubagentSpec{Model: "fake/worker", Tools: domain.On("current_time")},
 			depth: 1,
-			setup: func(src *agent.MockSource, ts *agent.MockToolset) {
-				src.EXPECT().Get(mock.Anything, "triager").Return(stored(true), nil).Once()
-				ts.EXPECT().For(domain.On("current_time"), false).Return(nil).Once()
+			setup: func(_ *agent.MockSource, ts *agent.MockToolset) {
+				ts.EXPECT().For(domain.On("current_time")).Return(nil).Once()
 			},
-			wantInfo: agent.Info{Name: "triager", AgentID: id, Version: 3, Model: "openai/gpt-5-mini",
-				OutputSchema: json.RawMessage(`{"type":"object"}`)},
-			wantModel: llm.Spec{Model: "openai/gpt-5-mini", Temperature: &temp},
+			wantInfo:  agent.Info{Name: "subagent", Model: "fake/worker"},
+			wantModel: llm.Spec{Model: "fake/worker"},
 		},
 		{
 			name:  "ad-hoc worker",
 			spec:  domain.SubagentSpec{Model: "fake/worker", Tools: domain.On("current_time")},
 			depth: 1,
 			setup: func(_ *agent.MockSource, ts *agent.MockToolset) {
-				ts.EXPECT().For(domain.On("current_time"), false).Return(nil).Once()
+				ts.EXPECT().For(domain.On("current_time")).Return(nil).Once()
 			},
 			wantInfo:  agent.Info{Name: "subagent", Model: "fake/worker"},
 			wantModel: llm.Spec{Model: "fake/worker"},
@@ -150,21 +137,4 @@ func TestBuildSpec(t *testing.T) {
 			assert.Equal(t, tt.wantModel, gotModel)
 		})
 	}
-}
-
-func TestEnsureAdmin(t *testing.T) {
-	t.Parallel()
-
-	seeder := agent.NewMockSeeder(t)
-	seeder.EXPECT().Ensure(mock.Anything, agent.AdminName, mock.Anything, true,
-		mock.MatchedBy(func(v domain.AgentVersionInput) bool {
-			cfg, err := domain.ParseAgentConfig(v.Config)
-			if err != nil {
-				return false
-			}
-			return v.Model == "openai/gpt-5" && v.SystemPrompt != "" &&
-				cfg.MaxIterations == 30 && assert.ObjectsAreEqual(domain.On(agent.AdminTools...), cfg.Tools)
-		})).Return(nil).Once()
-
-	require.NoError(t, agent.EnsureAdmin(context.Background(), seeder, "openai/gpt-5"))
 }

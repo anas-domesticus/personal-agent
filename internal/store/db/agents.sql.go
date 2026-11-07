@@ -38,34 +38,6 @@ func (q *Queries) CreateAgent(ctx context.Context, arg CreateAgentParams) (Agent
 	return i, err
 }
 
-const createAgentIfMissing = `-- name: CreateAgentIfMissing :one
-insert into agents (name, description)
-values ($1, $2)
-on conflict (name) do nothing
-returning id, name, description, current_version, created_at, updated_at, admin
-`
-
-type CreateAgentIfMissingParams struct {
-	Name        string `json:"name"`
-	Description string `json:"description"`
-}
-
-// Returns no row if an agent with this name already exists.
-func (q *Queries) CreateAgentIfMissing(ctx context.Context, arg CreateAgentIfMissingParams) (Agent, error) {
-	row := q.db.QueryRow(ctx, createAgentIfMissing, arg.Name, arg.Description)
-	var i Agent
-	err := row.Scan(
-		&i.ID,
-		&i.Name,
-		&i.Description,
-		&i.CurrentVersion,
-		&i.CreatedAt,
-		&i.UpdatedAt,
-		&i.Admin,
-	)
-	return i, err
-}
-
 const createAgentVersion = `-- name: CreateAgentVersion :one
 insert into agent_versions (agent_id, version, system_prompt, model, config, output_schema, notes)
 select $1, coalesce(max(version), 0) + 1,
@@ -298,21 +270,6 @@ func (q *Queries) ListAgents(ctx context.Context) ([]Agent, error) {
 		return nil, err
 	}
 	return items, nil
-}
-
-const setAgentAdmin = `-- name: SetAgentAdmin :exec
-update agents set admin = $2 where id = $1 and admin <> $2
-`
-
-type SetAgentAdminParams struct {
-	ID    uuid.UUID `json:"id"`
-	Admin bool      `json:"admin"`
-}
-
-// Not exposed as a tool. Only writes when the flag changes.
-func (q *Queries) SetAgentAdmin(ctx context.Context, arg SetAgentAdminParams) error {
-	_, err := q.db.Exec(ctx, setAgentAdmin, arg.ID, arg.Admin)
-	return err
 }
 
 const setAgentCurrentVersion = `-- name: SetAgentCurrentVersion :exec

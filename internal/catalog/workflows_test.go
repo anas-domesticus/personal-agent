@@ -2,6 +2,7 @@ package catalog_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 
@@ -14,6 +15,7 @@ import (
 	"github.com/anas-domesticus/personal-agent/internal/catalog"
 	"github.com/anas-domesticus/personal-agent/internal/domain"
 	"github.com/anas-domesticus/personal-agent/internal/embed"
+	"github.com/anas-domesticus/personal-agent/internal/store/db"
 	"github.com/anas-domesticus/personal-agent/internal/testdb"
 	"github.com/anas-domesticus/personal-agent/internal/workflow"
 )
@@ -158,6 +160,28 @@ func TestWorkflows(t *testing.T) {
 			numbers = append(numbers, v.Version)
 		}
 		assert.Equal(t, []int32{3, 2, 1}, numbers, "rejected versions aren't stored")
+	})
+
+	t.Run("delete", func(t *testing.T) {
+		t.Parallel()
+		workflows := catalog.NewWorkflows(st, okJobs(t), catalog.Search{})
+		_, err := workflows.Create(ctx, "disposable", "", single("worker"), "")
+		require.NoError(t, err)
+		require.NoError(t, workflows.Delete(ctx, "disposable"))
+		_, err = workflows.Get(ctx, "disposable")
+		require.ErrorIs(t, err, domain.ErrNotFound)
+		require.ErrorIs(t, workflows.Delete(ctx, "disposable"), domain.ErrNotFound)
+
+		withRun := catalog.NewWorkflows(st, okJobs(t), catalog.Search{})
+		version, err := withRun.Create(ctx, "has-runs", "", single("worker"), "")
+		require.NoError(t, err)
+		_, err = st.CreateRun(ctx, db.CreateRunParams{
+			WorkflowID: version.WorkflowID, WorkflowVersion: version.Version, Input: json.RawMessage(`{}`), TriggeredBy: "test",
+		})
+		require.NoError(t, err)
+		require.ErrorIs(t, withRun.Delete(ctx, "has-runs"), domain.ErrConflict)
+		_, err = withRun.Get(ctx, "has-runs")
+		require.NoError(t, err)
 	})
 }
 

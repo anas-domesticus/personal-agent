@@ -23,8 +23,7 @@ type AgentConfig struct {
 
 // ToolConfig maps a tool name to true (on, default settings), false (off),
 // or a settings object (on, with those settings). Tools that aren't listed
-// are off, except admin tools on admin agents, which are on unless set to
-// false.
+// are off.
 type ToolConfig map[string]json.RawMessage
 
 var (

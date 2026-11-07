@@ -26,6 +26,9 @@ update workflows
 set description = $2, embedding = null, embedding_model = null
 where id = $1;
 
+-- name: DeleteWorkflowByName :execrows
+delete from workflows where name = $1;
+
 -- name: GetWorkflowText :one
 select id, name, description from workflows where id = $1;
 

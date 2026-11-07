@@ -1,6 +1,6 @@
-// Package catalog stores agents, workflows and memories. Each has its own
+// Package catalog stores agents and workflows. Each has its own
 // service, which validates input, wraps writes in transactions, queues
-// embedding jobs in the same transaction, and returns domain types.
+// embedding jobs where needed, and returns domain types.
 package catalog
 
 import (
@@ -44,6 +44,14 @@ func uniqueViolation(err error, what string) error {
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) && pgErr.Code == "23505" {
 		return fmt.Errorf("%s: %w", what, domain.ErrExists)
+	}
+	return err
+}
+
+func foreignKeyViolation(err error, what string) error {
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) && pgErr.Code == "23503" {
+		return fmt.Errorf("%s: %w", what, domain.ErrConflict)
 	}
 	return err
 }

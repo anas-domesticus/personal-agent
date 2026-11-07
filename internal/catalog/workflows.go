@@ -141,6 +141,18 @@ func (w *Workflows) UpdateDescription(ctx context.Context, name, description str
 	})
 }
 
+// Delete removes a workflow and its versions. Recorded runs retain it instead.
+func (w *Workflows) Delete(ctx context.Context, name string) error {
+	n, err := w.st.DeleteWorkflowByName(ctx, name)
+	if err != nil {
+		return foreignKeyViolation(err, fmt.Sprintf("workflow %q has recorded runs", name))
+	}
+	if n == 0 {
+		return fmt.Errorf("workflow %q: %w", name, domain.ErrNotFound)
+	}
+	return nil
+}
+
 func (w *Workflows) queueEmbed(ctx context.Context, tx pgx.Tx, id uuid.UUID) error {
 	if _, err := w.jobs.InsertTx(ctx, tx, embed.Args{Target: embed.TargetWorkflow, ID: id}, nil); err != nil {
 		return fmt.Errorf("queue embed job: %w", err)

@@ -135,17 +135,6 @@ func TestWorker(t *testing.T) {
 			},
 		},
 		{
-			name:   "memory is embedded from its content",
-			target: embed.TargetMemory,
-			setup: func(s *embed.MockStore, e *mocks.MockEmbedder) {
-				s.EXPECT().GetMemory(mock.Anything, id).Return(db.GetMemoryRow{ID: id, Content: "likes tea"}, nil).Once()
-				e.EXPECT().EmbedStrings(mock.Anything, []string{"likes tea"}).Return(vector(embed.Dimensions), nil).Once()
-				s.EXPECT().SetMemoryEmbedding(mock.Anything, mock.MatchedBy(func(p db.SetMemoryEmbeddingParams) bool {
-					return p.ID == id && p.Content == "likes tea" && p.EmbeddingModel != nil && *p.EmbeddingModel == model
-				})).Return(1, nil).Once()
-			},
-		},
-		{
 			name:   "row deleted since the job was queued",
 			target: embed.TargetWorkflow,
 			setup: func(s *embed.MockStore, _ *mocks.MockEmbedder) {
@@ -178,9 +167,9 @@ func TestWorker(t *testing.T) {
 		},
 		{
 			name:   "store error is retried",
-			target: embed.TargetMemory,
+			target: embed.TargetWorkflow,
 			setup: func(s *embed.MockStore, _ *mocks.MockEmbedder) {
-				s.EXPECT().GetMemory(mock.Anything, id).Return(db.GetMemoryRow{}, errDB).Once()
+				s.EXPECT().GetWorkflowText(mock.Anything, id).Return(db.GetWorkflowTextRow{}, errDB).Once()
 			},
 			wantErrs: []error{errDB},
 		},

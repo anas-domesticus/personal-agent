@@ -27,7 +27,6 @@ func TestLoad(t *testing.T) {
 			want: config.Config{
 				DatabaseURL:    "postgres://db",
 				EmbeddingModel: "openai/text-embedding-3-small",
-				AdminModel:     "deepseek/deepseek-v4.1-flash",
 				SearchModel:    "deepseek/deepseek-v4.1-flash",
 				Workspace:      config.WorkspaceLocal,
 				WorkspaceDir:   "workspace",
@@ -39,26 +38,28 @@ func TestLoad(t *testing.T) {
 			name: "overrides",
 			env: map[string]string{
 				"DATABASE_URL": "postgres://db", "OPENROUTER_API_KEY": "key",
-				"EMBEDDING_MODEL": "e/m", "ADMIN_MODEL": "a/m", "SEARCH_MODEL": "s/m",
+				"EMBEDDING_MODEL": "e/m", "SEARCH_MODEL": "s/m",
 				"WORKSPACE": config.WorkspaceSandbox, "WORKSPACE_DIR": "/ws",
-				"AGENT_LISTEN": ":9000", "AGENT_TOKEN": "tok",
+				"MCP_LISTEN": "127.0.0.1:9000",
 			},
 			want: config.Config{
 				DatabaseURL: "postgres://db", OpenRouterAPIKey: "key",
-				EmbeddingModel: "e/m", AdminModel: "a/m", SearchModel: "s/m",
+				EmbeddingModel: "e/m", SearchModel: "s/m",
 				Workspace: config.WorkspaceSandbox, WorkspaceDir: "/ws", MCPConfigPath: missingMCP,
-				ListenAddr: ":9000", Token: "tok",
+				ListenAddr: "127.0.0.1:9000",
 			},
 		},
 		{name: "database url is required", env: map[string]string{}, wantErr: "DATABASE_URL is required"},
 		{name: "unknown workspace", env: map[string]string{"DATABASE_URL": "postgres://db", "WORKSPACE": "cloud"},
 			wantErr: "WORKSPACE must be"},
+		{name: "unauthenticated server must be local", env: map[string]string{"DATABASE_URL": "postgres://db", "MCP_LISTEN": ":9000"},
+			wantErr: "MCP_LISTEN must use a loopback address"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			for _, k := range []string{
-				"DATABASE_URL", "OPENROUTER_API_KEY", "EMBEDDING_MODEL", "ADMIN_MODEL",
-				"SEARCH_MODEL", "WORKSPACE", "WORKSPACE_DIR", "AGENT_LISTEN", "AGENT_TOKEN",
+				"DATABASE_URL", "OPENROUTER_API_KEY", "EMBEDDING_MODEL",
+				"SEARCH_MODEL", "WORKSPACE", "WORKSPACE_DIR", "MCP_LISTEN",
 			} {
 				t.Setenv(k, tt.env[k])
 			}

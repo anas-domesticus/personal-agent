@@ -15,13 +15,6 @@ from agents
 where name = $1
 for update;
 
--- name: CreateAgentIfMissing :one
--- Returns no row if an agent with this name already exists.
-insert into agents (name, description)
-values ($1, $2)
-on conflict (name) do nothing
-returning *;
-
 -- name: ListAgents :many
 select *
 from agents
@@ -39,10 +32,6 @@ returning *;
 
 -- name: GetAgentsByNames :many
 select * from agents where name = any(sqlc.arg(names)::text[]);
-
--- name: SetAgentAdmin :exec
--- Not exposed as a tool. Only writes when the flag changes.
-update agents set admin = $2 where id = $1 and admin <> $2;
 
 -- name: SetAgentCurrentVersion :exec
 update agents set current_version = $2 where id = $1;

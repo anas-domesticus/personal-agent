@@ -2,26 +2,22 @@
 
 Guidance for AI agents and people working in this repo. Read this first, then the documents it links to.
 
-**personal-agent** is a personal AI agent for work and home, written in Go.
-- It uses Eino agents over OpenRouter, with Postgres and pgvector for storage and River for jobs.
-- Agents and workflows are versioned and stored in the database.
-- An admin agent builds and maintains the others.
+**personal-agent** is a Postgres-backed orchestration MCP server for agentic work, written in Go.
+- It serves MCP over unauthenticated, stateless Streamable HTTP and runs workflows in the background.
+- Workflow agents use Eino over OpenRouter, Postgres and pgvector for storage, and River for jobs.
+- Agent, workflow and graph-node versions are immutable and stored in the database.
+- The wider skills and file-proxy design is still evolving.
 
 [docs/architecture.md](docs/architecture.md) describes the system as it is now.
 
 ## Hard rules
 
 1. **Never read, print or commit `.env`.** It holds the user's API keys. Tasks load it through `dotenv`; you never need its contents. Use `.env.example` to learn the settings.
-2. **A change is done only when `task check` passes.** It runs:
-   - the generated-code and `go.mod` drift checks;
-   - the docs check;
-   - lint;
-   - every test except live ones.
-   Never mark work complete with failures. Never skip or weaken a check to get green.
-3. **Never edit generated code:** `internal/gen` (buf, from `proto/`), `internal/store/db` (sqlc), `**/mocks_test.go` and `internal/mocks` (mockery). Change the source and run `task generate`.
+2. **A change is done only when `task check` passes.** It runs generated-code and `go.mod` drift checks, the docs check, lint, vulnerability checks and every test except live ones. Never mark work complete with failures. Never skip or weaken a check to get green.
+3. **Never edit generated code:** `internal/store/db` (sqlc), `**/mocks_test.go` and `internal/mocks` (mockery). Change the source and run `task generate`.
 4. **Never edit a committed migration.** Add a new one with `task migration:new -- name`.
 5. **Agent and workflow versions are immutable.** Change them by adding a new version.
-6. **Memory is on hold.** The user is designing the memory subsystem. Leave `memories`, `search_memories` and `remember` alone unless asked.
+6. **The MCP server deliberately has no auth.** Keep the default listener on loopback, preserve DNS-rebinding and cross-origin protection, and never store secrets in tool output.
 7. **Commit or push only when asked.**
 
 ## Commands
@@ -32,19 +28,17 @@ Everything runs through [Task](https://taskfile.dev). See [Taskfile.yml](Taskfil
 |---|---|
 | `task tools` | Install pinned golangci-lint, sqlc and goose (mockery runs via `go tool`) |
 | `task up` / `task down` | Start or stop the local Postgres |
-| `task run` | Start the server in-process and open the TUI on it (migrates on start; `task run -- -c` continues the last conversation) |
-| `task serve` / `task attach` | Run only the server, or open the TUI on a running one |
-| `task install` / `task uninstall` | Put the `agent` binary on your PATH (GOBIN, else GOPATH/bin), or remove it |
-| `task proto` | Regenerate the API code in `internal/gen` from `proto/` |
-| `task generate` | Regenerate the protobuf API code, sqlc code and mocks |
+| `task run` | Migrate, start background workers and serve MCP on `MCP_LISTEN` |
+| `task install` / `task uninstall` | Put the `orchestrator` binary on your PATH (GOBIN, else GOPATH/bin), or remove it |
+| `task generate` | Regenerate sqlc code and mocks |
 | `task fmt` | Format code |
 | `task lint` | golangci-lint |
 | `task test:unit` | Unit tests only; no Docker or network |
 | `task test` | Unit, database and integration tests (needs Docker) |
 | `task vuln` | govulncheck; accepted findings go in `.govulncheck-ignore` with a reason |
+| `task docs:check` | Every package has a doc comment and appears in the architecture doc |
 | `task check:fast` | Lint issues new since HEAD, unit tests and the docs check; no Docker |
 | `task test:live` | Tests against real OpenRouter (costs money; run only when asked) |
-| `task docs:check` | Every package has a doc comment and appears in the architecture doc |
 | `task check` | **Everything above except live tests. Must pass before work is done.** |
 
 Use `task check:fast` (or `task test:unit`) for a fast loop while working. Run `task check` before you finish. To target one package or test, pass arguments after `--`: `task test -- -run TestChat ./internal/chat`.
@@ -72,14 +66,13 @@ Before a non-trivial change is committed, have it reviewed by a fresh reviewer: 
 ## Where things live
 
 ```
-cmd/agent/               entrypoint: server, TUI, or both
-proto/                   the API contract (protobuf); generated into internal/gen
-internal/server/         the Connect API over the services
-internal/client, tui/    the API client and the terminal UI built on it (tui/list and tui/anim are copied from Crush)
+cmd/orchestrator/        MCP server and background-worker entrypoint
+internal/mcpserver/      typed MCP tools and Streamable HTTP transport
 internal/app/            composition root: builds and wires everything
 internal/domain/         shared types and sentinel errors
+internal/graph/          generic typed graph, immutable node history and enrichment
 internal/<service>/      catalog, chat, runs, agent, embed, ...
-internal/tools/          tool registry; one subpackage per tool set
+internal/tools/          workflow-agent tool registry; one subpackage per tool set
 internal/store/          pool, migrations, queries (sqlc output in store/db)
 internal/testdb, testenv test infrastructure (Postgres container, whole stack)
 docs/                    architecture and conventions
@@ -89,17 +82,12 @@ docs/                    architecture and conventions
 
 Docs are part of the change, not a follow-up. In the same change:
 
-- **New or renamed package:**
-  - give it a package comment;
-  - add it to the package map in `docs/architecture.md`.
-  `task docs:check` enforces both.
+- **New or renamed package:** give it a package comment and add it to the package map in `docs/architecture.md`. `task docs:check` enforces both.
 - **Behaviour, data model, tools, config or startup changes:** update the matching section of `docs/architecture.md`.
 - **New setting:** add it to `.env.example` and to the configuration section of the architecture doc.
 - **New or changed task:** update the command table above.
-- **New convention or exception:**
-  - write it into `docs/conventions/`;
-  - add a lint rule to `.golangci.yml` if one can enforce it.
-- **Admin agent capabilities change:** update `internal/agent/admin_prompt.md`.
+- **New convention or exception:** write it into `docs/conventions/` and add a lint rule to `.golangci.yml` if one can enforce it.
+- **MCP tools change:** document their semantics in `docs/architecture.md` and test them through an MCP client.
 - **These rules turn out to be wrong or incomplete:** fix this file.
 
 Write docs in plain British English, in the present tense, describing what exists rather than plans.

@@ -43,17 +43,57 @@ type Conversation struct {
 	Subagent  json.RawMessage `json:"subagent"`
 }
 
-type Memory struct {
-	ID             uuid.UUID        `json:"id"`
-	Content        string           `json:"content"`
-	Tags           []string         `json:"tags"`
-	Source         string           `json:"source"`
-	Metadata       json.RawMessage  `json:"metadata"`
-	Embedding      *pgvector.Vector `json:"embedding"`
-	EmbeddingModel *string          `json:"embedding_model"`
-	Search         interface{}      `json:"search"`
-	CreatedAt      time.Time        `json:"created_at"`
-	UpdatedAt      time.Time        `json:"updated_at"`
+type GraphEdge struct {
+	ID         uuid.UUID       `json:"id"`
+	Kind       string          `json:"kind"`
+	SourceID   uuid.UUID       `json:"source_id"`
+	SourceKind string          `json:"source_kind"`
+	TargetID   uuid.UUID       `json:"target_id"`
+	TargetKind string          `json:"target_kind"`
+	Data       json.RawMessage `json:"data"`
+	Revision   int64           `json:"revision"`
+	CreatedAt  time.Time       `json:"created_at"`
+	UpdatedAt  time.Time       `json:"updated_at"`
+}
+
+type GraphEdgeType struct {
+	Kind       string          `json:"kind"`
+	DataSchema json.RawMessage `json:"data_schema"`
+	CreatedAt  time.Time       `json:"created_at"`
+	UpdatedAt  time.Time       `json:"updated_at"`
+}
+
+type GraphEdgeTypeEndpoint struct {
+	EdgeKind   string `json:"edge_kind"`
+	SourceKind string `json:"source_kind"`
+	TargetKind string `json:"target_kind"`
+}
+
+type GraphNode struct {
+	ID             uuid.UUID       `json:"id"`
+	Kind           string          `json:"kind"`
+	Versioned      bool            `json:"versioned"`
+	Data           json.RawMessage `json:"data"`
+	CurrentVersion *int64          `json:"current_version"`
+	Revision       int64           `json:"revision"`
+	CreatedAt      time.Time       `json:"created_at"`
+	UpdatedAt      time.Time       `json:"updated_at"`
+}
+
+type GraphNodeType struct {
+	Kind       string          `json:"kind"`
+	Versioned  bool            `json:"versioned"`
+	DataSchema json.RawMessage `json:"data_schema"`
+	CreatedAt  time.Time       `json:"created_at"`
+	UpdatedAt  time.Time       `json:"updated_at"`
+}
+
+type GraphNodeVersion struct {
+	NodeID    uuid.UUID       `json:"node_id"`
+	Version   int64           `json:"version"`
+	Data      json.RawMessage `json:"data"`
+	Metadata  json.RawMessage `json:"metadata"`
+	CreatedAt time.Time       `json:"created_at"`
 }
 
 type Message struct {

@@ -15,8 +15,7 @@ packages:
     config:
       recursive: true
       # sqlc's generated DBTX; the database layer is tested against Postgres.
-      # And the Connect code generated from proto/, which buf owns outright.
-      exclude-subpkg-regex: ["store/db$", "^gen/"]
+      exclude-subpkg-regex: ["store/db$"]
   # Third-party interfaces our code consumes directly. These go in a shared,
   # non-test package so any package's tests can use them.
   github.com/cloudwego/eino/components/embedding:

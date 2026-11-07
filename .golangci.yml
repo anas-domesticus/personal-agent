@@ -33,10 +33,11 @@ linters:
             - {pkg: github.com/anas-domesticus/personal-agent/internal/catalog, desc: depend on a consumer-side interface; app wires the catalog}
             - {pkg: github.com/anas-domesticus/personal-agent/internal/chat, desc: depend on a consumer-side interface; app wires chat}
             - {pkg: github.com/anas-domesticus/personal-agent/internal/runs, desc: depend on a consumer-side interface; app wires runs}
+            - {pkg: github.com/anas-domesticus/personal-agent/internal/graph, desc: depend on a consumer-side interface; app wires the graph}
             - {pkg: github.com/anas-domesticus/personal-agent/internal/testenv, desc: test-only}
             - {pkg: github.com/anas-domesticus/personal-agent/internal/testdb, desc: test-only}
         table-owners:
-          files: ["$all", "!**/internal/store/**", "!**/internal/catalog/**", "!**/internal/chat/**", "!**/internal/runs/**", "!**/internal/embed/**"]
+          files: ["$all", "!**/internal/store/**", "!**/internal/catalog/**", "!**/internal/chat/**", "!**/internal/runs/**", "!**/internal/embed/**", "!**/internal/graph/**"]
           deny:
             - {pkg: github.com/anas-domesticus/personal-agent/internal/store/db, desc: only the packages that own tables use sqlc queries}
         tools-via-interfaces:
@@ -45,17 +46,6 @@ linters:
             - {pkg: github.com/anas-domesticus/personal-agent/internal/agent, desc: tools reach services through interfaces they declare}
             - {pkg: github.com/anas-domesticus/personal-agent/internal/embed, desc: tools reach services through interfaces they declare}
             - {pkg: github.com/anas-domesticus/personal-agent/internal/store, desc: tools reach services through interfaces they declare}
-        clients:
-          files: ["**/internal/tui/**", "**/internal/client/**", "!$test"]
-          deny:
-            - {pkg: github.com/anas-domesticus/personal-agent/internal/app, desc: clients talk to the server only through the API (proto/, internal/gen)}
-            - {pkg: github.com/anas-domesticus/personal-agent/internal/server, desc: clients talk to the server only through the API (proto/, internal/gen)}
-            - {pkg: github.com/anas-domesticus/personal-agent/internal/store, desc: clients talk to the server only through the API (proto/, internal/gen)}
-            - {pkg: github.com/anas-domesticus/personal-agent/internal/chat, desc: clients talk to the server only through the API (proto/, internal/gen)}
-            - {pkg: github.com/anas-domesticus/personal-agent/internal/catalog, desc: clients talk to the server only through the API (proto/, internal/gen)}
-            - {pkg: github.com/anas-domesticus/personal-agent/internal/runs, desc: clients talk to the server only through the API (proto/, internal/gen)}
-            - {pkg: github.com/anas-domesticus/personal-agent/internal/agent, desc: clients talk to the server only through the API (proto/, internal/gen)}
-            - {pkg: github.com/anas-domesticus/personal-agent/internal/domain, desc: clients talk to the server only through the API (proto/, internal/gen)}
         leaves:
           files: ["**/internal/domain/**", "**/internal/workflow/**", "**/internal/tools/kit/**", "**/internal/config/**", "**/internal/llm/**", "**/internal/search/**", "**/internal/workspace/**"]
           deny:
@@ -75,15 +65,12 @@ linters:
         - errors\.New\(
         - errors\.Join\(
         - river\.Job(Cancel|Snooze)\(
-        # Builds a new error carrying an API status code; it isn't passing one through.
-        - connect\.NewError\(
   exclusions:
     generated: strict
     presets: [std-error-handling]
     paths:
       - internal/store/db
       - internal/mocks
-      - internal/gen
 
 formatters:
   enable:

@@ -8,7 +8,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/schema"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
@@ -129,41 +128,6 @@ func TestRunWorkflow(t *testing.T) {
 		assert.Equal(t, domain.RunFailed, r.Steps[0].Status)
 	})
 
-	t.Run("admin tools start and inspect runs", func(t *testing.T) {
-		adminTools := e.Tools.For(nil, true)
-		res := call(t, adminTools, "run_workflow", `{"name": "triage", "input": {"day": "mon"}, "wait_seconds": 30}`)
-		data, isMap := res["data"].(map[string]any)
-		require.True(t, isMap, "run_workflow = %v", res)
-		assert.Equal(t, "succeeded", data["status"])
-		steps, isList := data["steps"].([]any)
-		require.True(t, isList, "run_workflow = %v", res)
-		require.Len(t, steps, 2)
-		assert.NotContains(t, steps[0], "transcript", "transcripts should be omitted by default")
-
-		res = call(t, adminTools, "list_runs", `{"workflow": "triage"}`)
-		assert.Len(t, res["data"], 3)
-
-		res = call(t, adminTools, "run_workflow", `{"name": "nope"}`)
-		assert.Equal(t, false, res["ok"], "expected error for unknown workflow: %v", res)
-	})
-}
-
-func call(t *testing.T, ts []tool.BaseTool, name, args string) map[string]any {
-	t.Helper()
-	for _, bt := range ts {
-		info, err := bt.Info(context.Background())
-		require.NoError(t, err)
-		if info.Name != name {
-			continue
-		}
-		out, err := bt.(tool.InvokableTool).InvokableRun(context.Background(), args)
-		require.NoError(t, err, name)
-		var res map[string]any
-		require.NoError(t, json.Unmarshal([]byte(out), &res), "%s: bad output %q", name, out)
-		return res
-	}
-	require.Failf(t, "tool not available", "tool %q", name)
-	return nil
 }
 
 // ok fails the test if a (value, error) call returned an error.

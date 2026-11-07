@@ -57,27 +57,10 @@ tasks:
   # --- Code generation ----------------------------------------------------
 
   generate:
-    desc: Regenerate all generated code (protobuf API, sqlc queries and mocks)
+    desc: Regenerate sqlc queries and mocks
     cmds:
-      - task: proto
       - task: sqlc
       - task: mocks
-
-  proto:
-    desc: Regenerate the API's Go types and Connect code from proto/ (buf, pinned in tools/go.mod)
-    sources: ["proto/**/*.proto", "buf.yaml", "buf.gen.yaml", "tools/go.mod"]
-    cmds:
-      - go tool -modfile=tools/go.mod buf generate
-
-  proto:lint:
-    desc: Lint proto/ and check it for changes that break existing clients (against main)
-    cmds:
-      - go tool -modfile=tools/go.mod buf lint
-      - go tool -modfile=tools/go.mod buf format --diff --exit-code
-      - |
-        if git cat-file -e main:proto 2>/dev/null; then
-          go tool -modfile=tools/go.mod buf breaking --against '.git#branch=main'
-        fi
 
   sqlc:
     desc: Regenerate query code from SQL
@@ -93,20 +76,20 @@ tasks:
   # --- Build and run ------------------------------------------------------
 
   build:
-    desc: Build agent (server and TUI)
-    deps: [sqlc, proto]
+    desc: Build the orchestrator
+    deps: [sqlc]
     cmds:
-      - go build -o bin/agent ./cmd/agent
+      - go build -o bin/orchestrator ./cmd/orchestrator
 
   install:
-    desc: Install the agent binary on your PATH (GOBIN, else GOPATH/bin)
-    deps: [sqlc, proto]
+    desc: Install the orchestrator binary on your PATH (GOBIN, else GOPATH/bin)
+    deps: [sqlc]
     vars:
       BIN:
         sh: d=$(go env GOBIN); [ -n "$d" ] || d="$(go env GOPATH)/bin"; echo "$d"
     cmds:
-      - go install ./cmd/agent
-      - 'echo "Installed {{.BIN}}/agent. It reads its settings from the environment (see .env.example), not from .env; set MCP_CONFIG and WORKSPACE_DIR to absolute paths."'
+      - go install ./cmd/orchestrator
+      - 'echo "Installed {{.BIN}}/orchestrator. It reads its settings from the environment (see .env.example), not from .env; set MCP_CONFIG and WORKSPACE_DIR to absolute paths."'
 
   uninstall:
     desc: Remove the binary task install put on your PATH
@@ -114,30 +97,19 @@ tasks:
       BIN:
         sh: d=$(go env GOBIN); [ -n "$d" ] || d="$(go env GOPATH)/bin"; echo "$d"
     cmds:
-      # Only remove an agent binary built from this module.
+      # Only remove an orchestrator binary built from this module.
       - |
-        if go version -m "{{.BIN}}/agent" 2>/dev/null | grep -q "$(go list -m)"; then
-          rm "{{.BIN}}/agent" && echo "Removed {{.BIN}}/agent"
+        if go version -m "{{.BIN}}/orchestrator" 2>/dev/null | grep -q "$(go list -m)"; then
+          rm "{{.BIN}}/orchestrator" && echo "Removed {{.BIN}}/orchestrator"
         else
-          echo "No agent binary from this repo in {{.BIN}}"
+          echo "No orchestrator binary from this repo in {{.BIN}}"
         fi
 
   run:
-    desc: "Run the server in-process and open the TUI on it (migrates on start). Flags after --, e.g. task run -- -c"
-    deps: [sqlc, proto]
+    desc: Run the unauthenticated MCP server and background workers (migrates on start)
+    deps: [sqlc]
     cmds:
-      - go run ./cmd/agent {{.CLI_ARGS}}
-
-  serve:
-    desc: Run only the server (AGENT_LISTEN, AGENT_TOKEN)
-    deps: [sqlc, proto]
-    cmds:
-      - go run ./cmd/agent serve
-
-  attach:
-    desc: "Open the TUI on a running server, e.g. task attach -- http://host:7433 (AGENT_URL, AGENT_TOKEN)"
-    cmds:
-      - go run ./cmd/agent attach {{.CLI_ARGS}}
+      - go run ./cmd/orchestrator
 
   # --- Quality ------------------------------------------------------------
 
@@ -147,10 +119,9 @@ tasks:
       - golangci-lint fmt ./...
 
   lint:
-    desc: Run golangci-lint (see .golangci.yml) and buf lint
+    desc: Run golangci-lint (see .golangci.yml)
     cmds:
       - golangci-lint run ./...
-      - task: proto:lint
 
   test:
     desc: Run unit and database tests (needs Docker for testcontainers)
@@ -182,11 +153,25 @@ tasks:
   generate:check:
     desc: Fail if generated code (sqlc, mocks) or go.mod is out of date
     cmds:
-      - task: generate
-      - go mod tidy
-      - cd tools && go mod tidy
-      - git diff --exit-code -- go.mod go.sum tools/go.mod tools/go.sum internal/gen internal/store/db internal/mocks '**/mocks_test.go'
-      - test -z "$(git status --porcelain -- internal/gen internal/store/db internal/mocks '**/mocks_test.go')"
+      - |
+        snapshot() {
+          git ls-files --cached --others --exclude-standard -- go.mod go.sum internal/store/db internal/mocks '**/mocks_test.go' |
+            sort |
+            while IFS= read -r file; do
+              if [ -f "$file" ]; then
+                printf '%s ' "$file"
+                git hash-object "$file"
+              fi
+            done
+        }
+        before="$(snapshot)"
+        task generate
+        go mod tidy
+        after="$(snapshot)"
+        if [ "$before" != "$after" ]; then
+          echo "Generated code or module files changed; run task generate and go mod tidy."
+          exit 1
+        fi
 
   vuln:
     desc: Check dependencies for known vulnerabilities

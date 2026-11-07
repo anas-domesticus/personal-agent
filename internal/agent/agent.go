@@ -4,7 +4,6 @@ package agent
 
 import (
 	"context"
-	_ "embed"
 	"encoding/json"
 	"fmt"
 
@@ -18,12 +17,6 @@ import (
 	"github.com/anas-domesticus/personal-agent/internal/domain"
 	"github.com/anas-domesticus/personal-agent/internal/llm"
 )
-
-// AdminName is the agent the TUI talks to.
-const AdminName = "admin"
-
-//go:embed admin_prompt.md
-var adminPrompt string
 
 // Runnable is a built agent, ready to run.
 type Runnable interface {
@@ -62,7 +55,7 @@ type Source interface {
 
 // Toolset builds the tools a config turns on. *tools.Toolset implements it.
 type Toolset interface {
-	For(cfg domain.ToolConfig, admin bool) []tool.BaseTool
+	For(cfg domain.ToolConfig) []tool.BaseTool
 }
 
 // ModelFactory builds a chat model.
@@ -85,15 +78,13 @@ type Builder struct {
 	Subagents SubagentStore
 }
 
-// Build builds an agent's current version as a top-level agent: admin agents
-// get the admin tools.
+// Build builds an agent's current version.
 func (b *Builder) Build(ctx context.Context, name string) (Runnable, error) {
 	return b.BuildSpec(ctx, domain.SubagentSpec{Agent: name}, 0)
 }
 
 // BuildSpec builds a stored agent (optionally on another model) or an ad-hoc
-// worker, at a subagent depth. Only top-level agents (depth 0) get admin
-// tools.
+// worker at a subagent depth.
 func (b *Builder) BuildSpec(ctx context.Context, spec domain.SubagentSpec, depth int) (Runnable, error) {
 	if spec.Agent == "" {
 		if spec.Model == "" {
@@ -125,7 +116,6 @@ func (b *Builder) BuildSpec(ctx context.Context, spec domain.SubagentSpec, depth
 		desc:   d.Description,
 		prompt: v.SystemPrompt,
 		cfg:    v.Config,
-		admin:  d.Admin && depth == 0,
 		depth:  depth,
 	})
 }
@@ -135,12 +125,11 @@ type assembly struct {
 	desc   string
 	prompt string
 	cfg    domain.AgentConfig
-	admin  bool
 	depth  int
 }
 
 func (b *Builder) assemble(ctx context.Context, a assembly) (Runnable, error) {
-	ts := b.Tools.For(a.cfg.Tools, a.admin)
+	ts := b.Tools.For(a.cfg.Tools)
 	if st, ok := b.subagentTool(a.cfg.Tools, a.depth); ok {
 		ts = append(ts, st)
 	}
@@ -166,35 +155,4 @@ func (b *Builder) assemble(ctx context.Context, a assembly) (Runnable, error) {
 		}
 	}
 	return &built{agent: ag, info: a.info}, nil
-}
-
-// Seeder creates an agent if it's missing. The catalog implements it.
-type Seeder interface {
-	Ensure(ctx context.Context, name, description string, admin bool, v domain.AgentVersionInput) error
-}
-
-// AdminTools are the general tools the admin agent is seeded with. Admin
-// tools come from its admin flag.
-var AdminTools = []string{
-	"current_time", "search_memories", "remember",
-	"web_search", "web_fetch", "subagent",
-	"read", "write", "edit", "glob", "grep", "shell",
-}
-
-// EnsureAdmin creates the admin agent on first start. Later versions, whether
-// written by a human or by the admin agent itself, are left alone.
-func EnsureAdmin(ctx context.Context, s Seeder, model string) error {
-	cfg, err := json.Marshal(domain.AgentConfig{MaxIterations: 30, Tools: domain.On(AdminTools...)})
-	if err != nil {
-		return fmt.Errorf("encode admin config: %w", err)
-	}
-	return s.Ensure(ctx, AdminName,
-		"The main agent. Talks to the user and manages the other agents and workflows.",
-		true,
-		domain.AgentVersionInput{
-			SystemPrompt: adminPrompt,
-			Model:        model,
-			Config:       cfg,
-			Notes:        "Seeded on first start.",
-		})
 }

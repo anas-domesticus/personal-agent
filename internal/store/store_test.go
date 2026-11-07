@@ -163,32 +163,6 @@ func TestStore(t *testing.T) {
 		assert.Empty(t, workflowNames(other), "matched vectors from another model")
 	})
 
-	t.Run("memory search", func(t *testing.T) {
-		add := func(content string, tags []string, e pgvector.Vector) {
-			t.Helper()
-			_, err := st.CreateMemory(ctx, db.CreateMemoryParams{
-				Content: content, Tags: tags, Metadata: json.RawMessage(`{}`),
-				Embedding: &e, EmbeddingModel: textOf("test"),
-			})
-			require.NoError(t, err)
-		}
-		add("The boiler struggles below minus two degrees", []string{"home"}, vec(1, 0))
-		add("Prefers the office at 19 degrees", []string{"home", "preference"}, vec(0.9, 0.1))
-		add("Weekly planning happens on Monday mornings", []string{"work"}, vec(0, 1))
-
-		// Semantic nearest to (1,0) should rank the boiler memory first.
-		got, err := st.SearchMemories(ctx, db.SearchMemoriesParams{UseSemantic: true, Embedding: vec(1, 0), Model: "test", Query: "boiler", Tags: []string{}, Candidates: 10, Lim: 3})
-		require.NoError(t, err)
-		require.NotEmpty(t, got)
-		assert.Equal(t, "The boiler struggles below minus two degrees", got[0].Content)
-
-		// Tag filter excludes the work memory even though it matches the vector.
-		got, err = st.SearchMemories(ctx, db.SearchMemoriesParams{UseSemantic: true, Embedding: vec(0, 1), Model: "test", Query: "planning", Tags: []string{"home"}, Candidates: 10, Lim: 5})
-		require.NoError(t, err)
-		for _, m := range got {
-			assert.NotContains(t, m.Tags, "work", "tag filter leaked %q", m.Content)
-		}
-	})
 }
 
 func workflowNames(rows []db.SearchWorkflowsRow) []string {

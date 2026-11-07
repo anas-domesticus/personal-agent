@@ -130,10 +130,8 @@ func TestSubagent(t *testing.T) {
 		require.NoError(t, err)
 		assert.Contains(t, top.Info().Tools, agent.SubagentToolName, "top-level agent is missing the subagent tool")
 
-		// Subagents never get admin tools.
-		admin, err := e.Builder.BuildSpec(ctx, domain.SubagentSpec{Agent: agent.AdminName}, 1)
+		_, err = e.Builder.BuildSpec(ctx, domain.SubagentSpec{Agent: "parent"}, 1)
 		require.NoError(t, err)
-		assert.NotContains(t, admin.Info().Tools, "create_agent", "admin agent run as a subagent kept its admin tools")
 	})
 
 	t.Run("stored agent on another model", func(t *testing.T) {

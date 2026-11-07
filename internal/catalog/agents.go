@@ -40,7 +40,7 @@ type validated struct {
 	config json.RawMessage
 }
 
-func (a *Agents) validate(in domain.AgentVersionInput, checkTools bool) (validated, error) {
+func (a *Agents) validate(in domain.AgentVersionInput) (validated, error) {
 	var errs []error
 	if strings.TrimSpace(in.SystemPrompt) == "" {
 		errs = append(errs, errors.New("system prompt is required"))
@@ -51,7 +51,7 @@ func (a *Agents) validate(in domain.AgentVersionInput, checkTools bool) (validat
 	cfg, err := domain.ParseAgentConfig(in.Config)
 	if err != nil {
 		errs = append(errs, err)
-	} else if checkTools {
+	} else {
 		for _, name := range sortedKeys(cfg.Tools) {
 			if err := a.tools.Check(name, cfg.Tools[name]); err != nil {
 				errs = append(errs, fmt.Errorf("config: tools.%s: %w", name, err))
@@ -74,12 +74,11 @@ func (a *Agents) validate(in domain.AgentVersionInput, checkTools bool) (validat
 }
 
 // Create creates an agent with its first version, which becomes current.
-// New agents are never admins.
 func (a *Agents) Create(ctx context.Context, name, description string, in domain.AgentVersionInput) (domain.AgentVersion, error) {
 	if err := checkName("agent", name); err != nil {
 		return domain.AgentVersion{}, err
 	}
-	v, err := a.validate(in, true)
+	v, err := a.validate(in)
 	if err != nil {
 		return domain.AgentVersion{}, err
 	}
@@ -97,7 +96,7 @@ func (a *Agents) Create(ctx context.Context, name, description string, in domain
 
 // AddVersion appends a version. If activate is set it becomes current.
 func (a *Agents) AddVersion(ctx context.Context, name string, in domain.AgentVersionInput, activate bool) (domain.AgentVersion, error) {
-	v, err := a.validate(in, true)
+	v, err := a.validate(in)
 	if err != nil {
 		return domain.AgentVersion{}, err
 	}
@@ -195,37 +194,9 @@ func (a *Agents) Versions(ctx context.Context, name string) ([]domain.AgentVersi
 	return out, nil
 }
 
-// Ensure creates the agent with the given first version if it doesn't exist,
-// and sets its admin flag. An existing agent's versions are left alone. It is
-// safe for several processes to call at once.
-func (a *Agents) Ensure(ctx context.Context, name, description string, admin bool, in domain.AgentVersionInput) error {
-	// Seed versions skip the tool check: they come from code, and a tool
-	// that isn't available in this process is skipped at build time anyway.
-	v, err := a.validate(in, false)
-	if err != nil {
-		return fmt.Errorf("seed version for %q: %w", name, err)
-	}
-	return a.st.InTx(ctx, func(q *db.Queries, _ pgx.Tx) error {
-		row, err := q.CreateAgentIfMissing(ctx, db.CreateAgentIfMissingParams{Name: name, Description: description})
-		switch {
-		case err == nil:
-			if _, err := addAgentVersion(ctx, q, row.ID, v, true); err != nil {
-				return err
-			}
-		case errors.Is(err, pgx.ErrNoRows):
-			if row, err = q.GetAgentByName(ctx, name); err != nil {
-				return err
-			}
-		default:
-			return err
-		}
-		return q.SetAgentAdmin(ctx, db.SetAgentAdminParams{ID: row.ID, Admin: admin})
-	})
-}
-
 func toAgent(r db.Agent) domain.Agent {
 	return domain.Agent{
-		ID: r.ID, Name: r.Name, Description: r.Description, Admin: r.Admin,
+		ID: r.ID, Name: r.Name, Description: r.Description,
 		CurrentVersion: r.CurrentVersion, CreatedAt: r.CreatedAt, UpdatedAt: r.UpdatedAt,
 	}
 }

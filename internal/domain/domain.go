@@ -1,5 +1,5 @@
-// Package domain holds the types every layer shares: agents, workflows, runs,
-// memories and conversations, and the errors that describe them.
+// Package domain holds the types every layer shares: agents, workflows, runs
+// and conversations, and the errors that describe them.
 //
 // The catalog, runs and chat services return these types rather than rows
 // generated from SQL, so tools and UIs don't depend on query shapes.
@@ -36,7 +36,6 @@ type Agent struct {
 	ID             uuid.UUID `json:"-"`
 	Name           string    `json:"name"`
 	Description    string    `json:"description"`
-	Admin          bool      `json:"admin"`
 	CurrentVersion *int32    `json:"current_version"`
 	CreatedAt      time.Time `json:"created_at"`
 	UpdatedAt      time.Time `json:"updated_at"`
@@ -97,23 +96,6 @@ type WorkflowDetail struct {
 // WorkflowMatch is a search result.
 type WorkflowMatch struct {
 	Workflow
-	Score float64 `json:"score"`
-}
-
-// --- Memories -----------------------------------------------------------------
-
-type Memory struct {
-	ID        uuid.UUID       `json:"id"`
-	Content   string          `json:"content"`
-	Tags      []string        `json:"tags"`
-	Source    string          `json:"source"`
-	Metadata  json.RawMessage `json:"metadata,omitempty"`
-	CreatedAt time.Time       `json:"created_at"`
-}
-
-// MemoryMatch is a search result.
-type MemoryMatch struct {
-	Memory
 	Score float64 `json:"score"`
 }
 
@@ -212,7 +194,7 @@ func ConversationFrom(ctx context.Context) (uuid.UUID, bool) {
 type callerKey struct{}
 
 // WithCaller records which agent is acting, so tools can attribute what they
-// do (e.g. a memory's source, or who triggered a run).
+// do (e.g. an agent's name, or who triggered a run).
 func WithCaller(ctx context.Context, agent string) context.Context {
 	return context.WithValue(ctx, callerKey{}, agent)
 }

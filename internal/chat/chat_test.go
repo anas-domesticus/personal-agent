@@ -3,7 +3,6 @@ package chat_test
 import (
 	"context"
 	"strconv"
-	"strings"
 	"testing"
 
 	"github.com/cloudwego/eino/schema"
@@ -24,7 +23,7 @@ func TestConversation(t *testing.T) {
 	e := testenv.New(t, "fake/admin")
 	ctx := context.Background()
 
-	// First turn: call list_agents, then answer from its result.
+	// First turn: call current_time, then answer from its result.
 	// Later turns: report how many messages the model was given.
 	e.SetModel("fake/admin", func(msgs []*schema.Message) *schema.Message {
 		last := msgs[len(msgs)-1]
@@ -32,19 +31,16 @@ func TestConversation(t *testing.T) {
 		case last.Role == schema.User && last.Content == "what agents exist?":
 			return schema.AssistantMessage("", []schema.ToolCall{{
 				ID: "call_1", Type: "function",
-				Function: schema.FunctionCall{Name: "list_agents", Arguments: "{}"},
+				Function: schema.FunctionCall{Name: "current_time", Arguments: "{}"},
 			}})
 		case last.Role == schema.Tool:
-			if strings.Contains(last.Content, `"name":"admin"`) {
-				return schema.AssistantMessage("Just me: admin.", nil)
-			}
-			return schema.AssistantMessage("couldn't see agents", nil)
+			return schema.AssistantMessage("Just me: admin.", nil)
 		default:
 			return schema.AssistantMessage("history has "+strconv.Itoa(len(msgs))+" messages", nil)
 		}
 	})
 
-	conv, err := e.Chat.Start(ctx, agent.AdminName)
+	conv, err := e.Chat.Start(ctx, testenv.DefaultAgent)
 	require.NoError(t, err)
 	id := conv.ID
 
@@ -59,7 +55,7 @@ func TestConversation(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, history, 4)
 	require.Len(t, history[1].ToolCalls, 1, "tool call did not round-trip")
-	assert.Equal(t, "list_agents", history[1].ToolCalls[0].Function.Name)
+	assert.Equal(t, "current_time", history[1].ToolCalls[0].Function.Name)
 	assert.Equal(t, schema.Tool, history[2].Role, "tool result did not round-trip")
 	assert.Equal(t, "call_1", history[2].ToolCallID, "tool result did not round-trip")
 
@@ -84,7 +80,7 @@ func TestFailedTurnLeavesNoTrace(t *testing.T) {
 		return schema.AssistantMessage("fine", nil)
 	})
 
-	conv, err := e.Chat.Start(ctx, agent.AdminName)
+	conv, err := e.Chat.Start(ctx, testenv.DefaultAgent)
 	require.NoError(t, err)
 	_, err = e.Chat.Send(ctx, conv.ID, "break", agent.Observer{})
 	require.Error(t, err, "expected the turn to fail")
@@ -112,7 +108,7 @@ func TestOneTurnAtATime(t *testing.T) {
 		return schema.AssistantMessage("done", nil)
 	})
 
-	conv, err := e.Chat.Start(ctx, agent.AdminName)
+	conv, err := e.Chat.Start(ctx, testenv.DefaultAgent)
 	require.NoError(t, err)
 	done := make(chan error)
 	go func() {
@@ -144,16 +140,16 @@ func TestFailedTurnAfterToolsIsKept(t *testing.T) {
 			return nil
 		}
 		return schema.AssistantMessage("", []schema.ToolCall{{
-			ID: "c1", Type: "function", Function: schema.FunctionCall{Name: "remember", Arguments: `{"content":"likes tea"}`},
+			ID: "c1", Type: "function", Function: schema.FunctionCall{Name: "current_time", Arguments: `{}`},
 		}})
 	})
-	conv, err := e.Chat.Start(ctx, agent.AdminName)
+	conv, err := e.Chat.Start(ctx, testenv.DefaultAgent)
 	require.NoError(t, err)
-	_, err = e.Chat.Send(ctx, conv.ID, "remember I like tea", agent.Observer{})
+	_, err = e.Chat.Send(ctx, conv.ID, "what time is it?", agent.Observer{})
 	require.Error(t, err, "expected the turn to fail")
 	h, err := e.Chat.History(ctx, conv.ID)
 	require.NoError(t, err)
-	// user, tool call, tool result: the memory was saved, so the history says so.
+	// user, tool call, tool result: the successful tool call stays in history.
 	require.Len(t, h, 3)
 	assert.Equal(t, schema.Tool, h[2].Role)
 }

@@ -11,15 +11,14 @@ Checklists for the common changes. Each ends with `task check`. Conventions are 
    - If the tool takes settings, add `Settings` (a struct with a `Validate() error` method) and `SettingsHelp`.
    - Put the model-facing description in `desc/<name>.md` and load it with `//go:embed`.
    - Return failures through `kit.Result` so the model sees them. Keep output within `kit.MaxOutput`.
-3. **Register the set** in `generalTools` in `internal/app/app.go`. An admin tool goes in `internal/tools/admin` instead, with its name added to `admin.Names`.
-4. **Decide whether the admin agent should get it.** If it should, add it to `agent.AdminTools`. That list only affects new databases; existing admins need a new version.
+3. **Register the set** in `generalTools` in `internal/app/app.go`.
+4. **Expose management operations over MCP** in `internal/mcpserver` when clients need them. Use typed inputs and outputs, accurate annotations and consumer-side interfaces.
 5. **Write tests** (table-driven):
    - its input handling and its errors;
    - its settings decoding;
-   - one test through the registry, if config rules apply.
-6. **Update the docs:**
-   - the Tools table in `docs/architecture.md`;
-   - `internal/agent/admin_prompt.md`, if the admin should know when to use it.
+   - one test through the registry, if config rules apply;
+   - MCP operations through an MCP client.
+6. **Update the docs:** the MCP API or workflow-agent tool sections in `docs/architecture.md`.
 7. Run `task check`.
 
 ## Change the schema or add queries

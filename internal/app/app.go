@@ -1,16 +1,8 @@
-// Package app wires the whole system together. Every binary that runs the
-// system (cmd/agent, and testenv for tests) builds an App rather than
-// repeating the wiring.
+// Package app wires the orchestration system together. The MCP binary and
+// integration tests build an App rather than repeating the wiring.
 //
-// Construction order is what makes the seams work without late binding:
-//
-//  1. store, an insert-only River client, MCP servers, the workspace and
-//     web search
-//  2. memories, then the general tool registry (which needs memories)
-//  3. agents (which validate tools against the registry), workflows, runs
-//  4. admin tools (which need agents, workflows and runs), then the toolset
-//  5. the agent builder, chat, and finally the working River client, whose
-//     workers need the builder
+// Construction creates the stores and model clients, then agent definitions,
+// workflows and runs, and finally the workers that execute them.
 package app
 
 import (
@@ -36,12 +28,10 @@ import (
 	"github.com/anas-domesticus/personal-agent/internal/search"
 	"github.com/anas-domesticus/personal-agent/internal/store"
 	"github.com/anas-domesticus/personal-agent/internal/tools"
-	"github.com/anas-domesticus/personal-agent/internal/tools/admin"
 	"github.com/anas-domesticus/personal-agent/internal/tools/clock"
 	"github.com/anas-domesticus/personal-agent/internal/tools/files"
 	"github.com/anas-domesticus/personal-agent/internal/tools/kit"
 	"github.com/anas-domesticus/personal-agent/internal/tools/mcp"
-	"github.com/anas-domesticus/personal-agent/internal/tools/memory"
 	"github.com/anas-domesticus/personal-agent/internal/tools/web"
 	"github.com/anas-domesticus/personal-agent/internal/workspace"
 )
@@ -73,11 +63,9 @@ type App struct {
 	Search    search.Searcher
 	Agents    *catalog.Agents
 	Workflows *catalog.Workflows
-	Memories  *catalog.Memories
 	Runs      *runs.Service
 	Tools     *tools.Toolset
 	Builder   *agent.Builder
-	Chat      *chat.Service
 
 	// Jobs queues jobs; it never works them.
 	Jobs *river.Client[pgx.Tx]
@@ -154,13 +142,12 @@ func New(ctx context.Context, cfg config.Config, opts Options) (_ *App, err erro
 	}
 
 	semantic := catalog.Search{Embedder: embedder, Model: cfg.EmbeddingModel}
-	a.Memories = catalog.NewMemories(a.Store, a.Jobs, semantic)
 
 	general, err := generalTools(a)
 	if err != nil {
 		return nil, err
 	}
-	registry, err := tools.New(general, admin.Names, a.MCP)
+	registry, err := tools.New(general, a.MCP)
 	if err != nil {
 		return nil, err
 	}
@@ -168,20 +155,10 @@ func New(ctx context.Context, cfg config.Config, opts Options) (_ *App, err erro
 	a.Workflows = catalog.NewWorkflows(a.Store, a.Jobs, semantic)
 	a.Runs = runs.NewService(a.Store, a.Jobs)
 
-	adminTools, err := admin.New(admin.Deps{Agents: a.Agents, Workflows: a.Workflows, Runs: a.Runs, Tools: registry})
-	if err != nil {
-		return nil, err
-	}
-	if a.Tools, err = registry.WithAdmin(adminTools); err != nil {
-		return nil, err
-	}
+	a.Tools = registry.NewToolset()
 
-	if err := agent.EnsureAdmin(ctx, a.Agents, cfg.AdminModel); err != nil {
-		return nil, fmt.Errorf("ensure admin agent: %w", err)
-	}
 	conversations := chat.NewPGStore(a.Store)
 	a.Builder = &agent.Builder{Agents: a.Agents, Tools: a.Tools, Models: models, Catalog: modelCatalog, Subagents: conversations}
-	a.Chat = chat.New(conversations, a.Builder)
 
 	// Each queue is worked only where it can be: runs need models, and
 	// embeddings need an embedder. Jobs for an unworked queue wait for a
@@ -216,13 +193,9 @@ func (a *App) Start() error {
 	return nil
 }
 
-// Close interrupts running chat turns and waits for them to be saved, stops
-// working jobs, letting running ones finish until ctx ends and cancelling the
-// rest, then disconnects everything.
+// Close stops working jobs, letting running ones finish until ctx ends and
+// cancelling the rest, then disconnects everything.
 func (a *App) Close(ctx context.Context) {
-	if a.Chat != nil {
-		a.Chat.Close(ctx)
-	}
 	if a.worker != nil {
 		if err := a.worker.Stop(ctx); err != nil {
 			slog.Warn("jobs did not finish in time; cancelling them", "err", err)
@@ -243,7 +216,6 @@ func generalTools(a *App) ([]kit.Spec, error) {
 	var all []kit.Spec
 	for _, set := range []func() ([]kit.Spec, error){
 		func() ([]kit.Spec, error) { return kit.Specs(clock.Tools()) },
-		func() ([]kit.Spec, error) { return kit.Specs(memory.Tools(a.Memories)) },
 		func() ([]kit.Spec, error) { return web.Specs(a.Search, nil) },
 		func() ([]kit.Spec, error) { return files.Specs(a.Workspace) },
 		func() ([]kit.Spec, error) { return []kit.Spec{agent.SubagentSpec()}, nil },

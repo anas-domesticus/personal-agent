@@ -1,4 +1,4 @@
-// Package embed fills in embeddings for workflows and memories using River jobs.
+// Package embed fills in workflow embeddings using River jobs.
 //
 // Rows are saved without an embedding. An "embed" job computes one row's
 // vector. A periodic "embed_sweep" job finds rows with no embedding, or one
@@ -48,10 +48,7 @@ const sweepBatch = 500
 
 type Target string
 
-const (
-	TargetWorkflow Target = "workflow"
-	TargetMemory   Target = "memory"
-)
+const TargetWorkflow Target = "workflow"
 
 // Args embeds one row.
 type Args struct {
@@ -91,10 +88,7 @@ var ErrDimensions = errors.New("embedding dimensions don't match")
 type Store interface {
 	GetWorkflowText(ctx context.Context, id uuid.UUID) (db.GetWorkflowTextRow, error)
 	SetWorkflowEmbedding(ctx context.Context, arg db.SetWorkflowEmbeddingParams) (int64, error)
-	GetMemory(ctx context.Context, id uuid.UUID) (db.GetMemoryRow, error)
-	SetMemoryEmbedding(ctx context.Context, arg db.SetMemoryEmbeddingParams) (int64, error)
 	ListWorkflowsMissingEmbedding(ctx context.Context, arg db.ListWorkflowsMissingEmbeddingParams) ([]uuid.UUID, error)
-	ListMemoriesMissingEmbedding(ctx context.Context, arg db.ListMemoriesMissingEmbeddingParams) ([]uuid.UUID, error)
 }
 
 // Text embeds one text as a vector of the stored size.
@@ -133,8 +127,6 @@ func (w *Worker) Work(ctx context.Context, job *river.Job[Args]) error {
 	switch job.Args.Target {
 	case TargetWorkflow:
 		written, err = w.workflow(ctx, job.Args.ID)
-	case TargetMemory:
-		written, err = w.memory(ctx, job.Args.ID)
 	default:
 		return river.JobCancel(fmt.Errorf("unknown target %q", job.Args.Target))
 	}
@@ -168,21 +160,6 @@ func (w *Worker) workflow(ctx context.Context, id uuid.UUID) (int64, error) {
 	})
 }
 
-func (w *Worker) memory(ctx context.Context, id uuid.UUID) (int64, error) {
-	row, err := w.Store.GetMemory(ctx, id)
-	if err != nil {
-		return 0, err
-	}
-	vec, err := w.embed(ctx, row.Content)
-	if err != nil {
-		return 0, err
-	}
-	return w.Store.SetMemoryEmbedding(ctx, db.SetMemoryEmbeddingParams{
-		ID: id, Content: row.Content,
-		Embedding: &vec, EmbeddingModel: &w.Model,
-	})
-}
-
 func (w *Worker) embed(ctx context.Context, text string) (pgvector.Vector, error) {
 	vec, err := Text(ctx, w.Embedder, text)
 	if errors.Is(err, ErrDimensions) {
@@ -212,17 +189,9 @@ func (w *SweepWorker) Work(ctx context.Context, _ *river.Job[SweepArgs]) error {
 	if err != nil {
 		return err
 	}
-	memories, err := w.Store.ListMemoriesMissingEmbedding(ctx, db.ListMemoriesMissingEmbeddingParams{Model: w.Model, Lim: sweepBatch})
-	if err != nil {
-		return err
-	}
-
-	params := make([]river.InsertManyParams, 0, len(workflows)+len(memories))
+	params := make([]river.InsertManyParams, 0, len(workflows))
 	for _, id := range workflows {
 		params = append(params, river.InsertManyParams{Args: Args{Target: TargetWorkflow, ID: id}})
-	}
-	for _, id := range memories {
-		params = append(params, river.InsertManyParams{Args: Args{Target: TargetMemory, ID: id}})
 	}
 	if len(params) == 0 {
 		return nil
@@ -232,7 +201,7 @@ func (w *SweepWorker) Work(ctx context.Context, _ *river.Job[SweepArgs]) error {
 	if _, err := client.InsertMany(ctx, params); err != nil {
 		return fmt.Errorf("queue embed jobs: %w", err)
 	}
-	slog.Info("queued embedding jobs", "workflows", len(workflows), "memories", len(memories))
+	slog.Info("queued workflow embedding jobs", "workflows", len(workflows))
 	return nil
 }
 

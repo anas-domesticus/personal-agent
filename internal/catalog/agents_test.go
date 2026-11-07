@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"strings"
-	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -119,7 +118,6 @@ func TestAgentsCreate(t *testing.T) {
 
 			got, err := agents.Get(ctx, tt.agent)
 			require.NoError(t, err)
-			assert.False(t, got.Admin, "new agents are never admins")
 			require.NotNil(t, got.Current)
 			assert.Equal(t, int32(1), got.Current.Version)
 			assert.Equal(t, v.Config, got.Current.Config)
@@ -202,58 +200,4 @@ func TestAgentsVersions(t *testing.T) {
 			})
 		}
 	})
-}
-
-func TestAgentsEnsure(t *testing.T) {
-	t.Parallel()
-	st, _ := testdb.Open(t)
-	ctx := context.Background()
-	// No expectations: Ensure must not consult the tool policy.
-	agents := catalog.NewAgents(st, catalog.NewMockToolPolicy(t))
-
-	seed := version("seed")
-	seed.Config = json.RawMessage(`{"tools":{"not_in_this_process":true}}`)
-
-	// Ordered steps over one agent, so they run sequentially.
-	require.NoError(t, agents.Ensure(ctx, "seeded", "desc", true, seed))
-	d, err := agents.Get(ctx, "seeded")
-	require.NoError(t, err)
-	assert.True(t, d.Admin)
-	require.NotNil(t, d.Current)
-	assert.Equal(t, "seed", d.Current.SystemPrompt)
-	assert.Equal(t, []string{"not_in_this_process"}, d.Current.Config.Tools.Enabled(), "seed versions skip the tool check")
-
-	// Again, with a different version and admin off: versions are left
-	// alone, the admin flag follows the call.
-	require.NoError(t, agents.Ensure(ctx, "seeded", "desc", false, version("changed")))
-	d, err = agents.Get(ctx, "seeded")
-	require.NoError(t, err)
-	assert.False(t, d.Admin)
-	require.NotNil(t, d.Current)
-	assert.Equal(t, "seed", d.Current.SystemPrompt)
-	all, err := agents.Versions(ctx, "seeded")
-	require.NoError(t, err)
-	assert.Len(t, all, 1)
-
-	err = agents.Ensure(ctx, "bad-seed", "", false, version(""))
-	require.ErrorContains(t, err, `seed version for "bad-seed"`)
-
-	// Several processes ensuring the same agent at once end with one agent
-	// and one version.
-	var wg sync.WaitGroup
-	errs := make([]error, 8)
-	for i := range errs {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			errs[i] = agents.Ensure(ctx, "racing", "", true, version("p"))
-		}()
-	}
-	wg.Wait()
-	for _, err := range errs {
-		require.NoError(t, err)
-	}
-	all, err = agents.Versions(ctx, "racing")
-	require.NoError(t, err)
-	assert.Len(t, all, 1)
 }

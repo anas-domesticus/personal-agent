@@ -5,6 +5,7 @@ package testenv
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/url"
@@ -16,15 +17,21 @@ import (
 	"github.com/cloudwego/eino/components/embedding"
 	"github.com/cloudwego/eino/components/model"
 	"github.com/cloudwego/eino/schema"
+	"github.com/stretchr/testify/require"
 
 	"github.com/anas-domesticus/personal-agent/internal/agent"
 	"github.com/anas-domesticus/personal-agent/internal/app"
+	"github.com/anas-domesticus/personal-agent/internal/chat"
 	"github.com/anas-domesticus/personal-agent/internal/config"
+	"github.com/anas-domesticus/personal-agent/internal/domain"
 	"github.com/anas-domesticus/personal-agent/internal/llm"
 	"github.com/anas-domesticus/personal-agent/internal/search"
 	"github.com/anas-domesticus/personal-agent/internal/testdb"
 	"github.com/anas-domesticus/personal-agent/internal/workspace"
 )
+
+// DefaultAgent is the stored agent created for tests that request a model.
+const DefaultAgent = "admin"
 
 // Responder produces a fake model's reply to a conversation.
 type Responder func(msgs []*schema.Message) *schema.Message
@@ -33,6 +40,7 @@ type Responder func(msgs []*schema.Message) *schema.Message
 // unknown slugs reply "ok".
 type Env struct {
 	*app.App
+	Chat *chat.Service
 
 	mu     sync.Mutex
 	models map[string]Responder
@@ -75,7 +83,7 @@ func NewWith(t *testing.T, adminModel string, o Options) *Env {
 			return &fakeModel{env: e, slug: spec.Model}, nil
 		}
 	}
-	cfg := config.Config{EmbeddingModel: FakeEmbeddingModel, AdminModel: adminModel, MCP: o.MCP}
+	cfg := config.Config{EmbeddingModel: FakeEmbeddingModel, MCP: o.MCP}
 	ws, err := workspace.NewLocal(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -92,12 +100,25 @@ func NewWith(t *testing.T, adminModel string, o Options) *Env {
 		t.Fatal(err)
 	}
 	e.App = a
+	if adminModel != "" {
+		cfg, err := json.Marshal(domain.AgentConfig{MaxIterations: 30, Tools: domain.On(
+			"current_time", "web_search", "web_fetch", "subagent",
+			"read", "write", "edit", "glob", "grep", "shell",
+		)})
+		require.NoError(t, err)
+		_, err = a.Agents.Create(ctx, DefaultAgent, "Test agent", domain.AgentVersionInput{
+			SystemPrompt: "Complete the requested task.", Model: adminModel, Config: cfg,
+		})
+		require.NoError(t, err)
+	}
+	e.Chat = chat.New(chat.NewPGStore(st), a.Builder)
 	if err := a.Start(); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
 		c, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
+		e.Chat.Close(c)
 		a.Close(c)
 	})
 	return e
