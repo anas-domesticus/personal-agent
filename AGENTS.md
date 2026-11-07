@@ -7,7 +7,7 @@ Guidance for AI agents and people working in this repo. Read this first, then th
 - Workflow agents use Eino over OpenRouter, Postgres and pgvector for storage, and River for jobs.
 - Workflows are instruction sets, not queries run against the knowledge base. External consumer agents may author, test and iterate them using immutable versions; do not propose or implement workflow changes as part of the product boundary.
 - Agent and workflow definitions, and graph-node snapshots, are immutable and stored in the database.
-- `internal/graph` is wired into `internal/app`, which registers versioned objective, workflow, claim, source and agent types. MCP exposes node upsert and semantic search; every changed node queues title and description embeddings.
+- `internal/graph` is wired into `internal/app`, which registers versioned objective, workflow, claim, source and agent types. MCP and enabled workflow agents expose node upsert and semantic search; every changed node queues title and description embeddings.
 - Deterministic question tooling will return structured nodes and evidence rather than conversational answers. Ask a Question is future direction. The existing internal agent loop is retained for enrichment jobs and scheduled tasks only in the target boundary; schedules are future and are not implemented. Cloud deployment and authentication are also not implemented. Memory has been removed; do not document or build on it as existing behaviour.
 
 [docs/architecture.md](docs/architecture.md) describes the system as it is now.

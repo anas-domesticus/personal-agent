@@ -18,7 +18,7 @@ That is the target boundary, not a claim that every capability exists today. The
 - Registers versioned objective, workflow, claim, source and agent types in the Postgres graph. The graph module also supports constrained edges, rollback and externally defined enrichment handlers; the base schema registers no relationships or handlers.
 - Queues separate title and description embeddings whenever a knowledge node changes and searches current nodes by semantic similarity.
 - Searches workflows by meaning and keywords with pgvector.
-- Gives workflow agents configurable file, shell, web, clock and external MCP tools.
+- Gives workflow agents configurable file, shell, web, clock, knowledge-node and external MCP tools.
 
 The server has no authentication and only accepts loopback listen addresses. Do not expose it to an untrusted network. Its file and shell tools inherit the server's operating-system permissions, so use a container when stronger isolation is needed.
 

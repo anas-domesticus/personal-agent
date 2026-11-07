@@ -91,6 +91,7 @@ MCP client ══ Streamable HTTP ══> mcpserver ──> catalog, runs (consu
 | `internal/tools/kit` | Tool construction, result limits and configuration helpers |
 | `internal/tools/clock` | Current-time tool |
 | `internal/tools/files` | File and shell tools through `workspace.Workspace` |
+| `internal/tools/knowledge` | Native upsert and semantic-search tools for predefined knowledge nodes |
 | `internal/tools/web` | Web search and fetch |
 | `internal/tools/mcp` | Outbound MCP clients and tool discovery |
 | `internal/workspace` | Local or remote-sandbox workspace boundary |
@@ -122,7 +123,7 @@ The transport is stateless and returns JSON responses. Durable state lives in Po
 
 An agent version holds its system prompt, OpenRouter model, settings, tools and optional output JSON Schema. Models, embeddings and search all use `OPENROUTER_API_KEY`; without it the MCP management API still works, but model runs and embeddings wait unavailable and semantic knowledge-node search returns `ErrUnavailable`.
 
-An agent version's `config.tools` enables native tools, settings objects and tools from configured outbound MCP servers. `list_tools` describes the available tools and their settings. Tools that disappear or are temporarily unavailable are skipped when an agent builds rather than making its stored version unreadable.
+An agent version's `config.tools` enables native tools, settings objects and tools from configured outbound MCP servers. `list_tools` describes the available tools and their settings. Native `upsert_knowledge_node` and `search_knowledge_nodes` tools let enabled agents write and search the predefined knowledge schema through `app.Knowledge`, using the same UUID parsing, new-node expected-revision validation and semantic-search behaviour as the MCP operations. Native search limits default to 10 and are capped at 100. Tool failures are returned to the model as `kit.Result` values. Tools that disappear or are temporarily unavailable are skipped when an agent builds rather than making its stored version unreadable.
 
 The workspace controls all file and command operations. Local commands receive a small environment rather than server secrets, run in their own process group and are killed on timeout. They still have the server's operating-system permissions, so use a container for isolation. `WORKSPACE=sandbox` selects the remote-sandbox boundary, whose operations currently return unimplemented.
 

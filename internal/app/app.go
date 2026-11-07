@@ -32,6 +32,7 @@ import (
 	"github.com/anas-domesticus/personal-agent/internal/tools/clock"
 	"github.com/anas-domesticus/personal-agent/internal/tools/files"
 	"github.com/anas-domesticus/personal-agent/internal/tools/kit"
+	"github.com/anas-domesticus/personal-agent/internal/tools/knowledge"
 	"github.com/anas-domesticus/personal-agent/internal/tools/mcp"
 	"github.com/anas-domesticus/personal-agent/internal/tools/web"
 	"github.com/anas-domesticus/personal-agent/internal/workspace"
@@ -228,6 +229,7 @@ func generalTools(a *App) ([]kit.Spec, error) {
 		func() ([]kit.Spec, error) { return kit.Specs(clock.Tools()) },
 		func() ([]kit.Spec, error) { return web.Specs(a.Search, nil) },
 		func() ([]kit.Spec, error) { return files.Specs(a.Workspace) },
+		func() ([]kit.Spec, error) { return kit.Specs(knowledge.Tools(&a.Knowledge)) },
 		func() ([]kit.Spec, error) { return []kit.Spec{agent.SubagentSpec()}, nil },
 	} {
 		specs, err := set()
