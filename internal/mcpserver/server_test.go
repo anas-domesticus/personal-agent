@@ -14,31 +14,34 @@ import (
 	"github.com/anas-domesticus/personal-agent/internal/workflow"
 )
 
-func TestServer(t *testing.T) {
+func TestAdminServer(t *testing.T) {
 	t.Parallel()
 	agents := NewMockAgents(t)
 	workflows := NewMockWorkflows(t)
 	runs := NewMockRuns(t)
 	tools := NewMockTools(t)
-	srv, _ := New(Deps{Agents: agents, Workflows: workflows, Runs: runs, Knowledge: NewMockKnowledge(t), Tools: tools})
+	srv, _ := NewAdmin(AdminDeps{
+		Agents: agents, Workflows: workflows, Runs: runs, Tools: tools,
+		Schema: NewMockSchema(t), SchemaAdmin: NewMockSchemaAdmin(t),
+	})
 	session := connect(t, srv)
 
 	listed, err := session.ListTools(context.Background(), nil)
 	require.NoError(t, err)
-	assert.Len(t, listed.Tools, 26)
-	var addSupportedBy *mcp.Tool
+	assert.Len(t, listed.Tools, 25)
+	names := make(map[string]bool, len(listed.Tools))
 	for _, tool := range listed.Tools {
+		names[tool.Name] = true
 		assert.NotNil(t, tool.InputSchema, tool.Name)
 		assert.NotNil(t, tool.OutputSchema, tool.Name)
 		assert.False(t, *tool.Annotations.OpenWorldHint, tool.Name)
-		if tool.Name == "add_supported_by" {
-			addSupportedBy = tool
-		}
 	}
-	require.NotNil(t, addSupportedBy)
-	assert.True(t, addSupportedBy.Annotations.IdempotentHint)
-	require.NotNil(t, addSupportedBy.Annotations.DestructiveHint)
-	assert.False(t, *addSupportedBy.Annotations.DestructiveHint)
+	assert.Contains(t, names, "create_node_type")
+	assert.Contains(t, names, "create_edge_type")
+	assert.Contains(t, names, "get_node_type")
+	assert.NotContains(t, names, "get_node")
+	assert.NotContains(t, names, "upsert_edge")
+	assert.NotContains(t, names, "add_supported_by")
 
 	graph := workflow.Graph{Nodes: []workflow.Node{{ID: "only", Agent: "worker"}}, Edges: []workflow.Edge{}}
 	workflows.EXPECT().Create(mock.Anything, "daily", "Daily work", graph, "first").
@@ -60,6 +63,87 @@ func TestServer(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.False(t, searched.IsError)
+}
+
+func TestSearchWorkflowsBoundsLimit(t *testing.T) {
+	t.Parallel()
+	for _, tt := range []struct {
+		name      string
+		arguments map[string]any
+		want      int32
+	}{
+		{name: "omitted", arguments: map[string]any{"query": "daily"}, want: 10},
+		{name: "excessive", arguments: map[string]any{"query": "daily", "limit": 1000}, want: 100},
+		{name: "negative", arguments: map[string]any{"query": "daily", "limit": -1}, want: 10},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			workflows := NewMockWorkflows(t)
+			srv, _ := NewAdmin(AdminDeps{
+				Agents: NewMockAgents(t), Workflows: workflows, Runs: NewMockRuns(t), Tools: NewMockTools(t),
+				Schema: NewMockSchema(t), SchemaAdmin: NewMockSchemaAdmin(t),
+			})
+			session := connect(t, srv)
+			workflows.EXPECT().Search(mock.Anything, "daily", tt.want).Return([]domain.WorkflowMatch{}, nil).Once()
+			result := callTool(t, session, "search_workflows", tt.arguments)
+			require.False(t, result.IsError)
+		})
+	}
+}
+
+func TestListRunsBoundsLimit(t *testing.T) {
+	t.Parallel()
+	for _, tt := range []struct {
+		name      string
+		arguments map[string]any
+		want      int32
+	}{
+		{name: "omitted", arguments: map[string]any{}, want: 10},
+		{name: "excessive", arguments: map[string]any{"limit": 1000}, want: 100},
+		{name: "negative", arguments: map[string]any{"limit": -1}, want: 10},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			runs := NewMockRuns(t)
+			srv, _ := NewAdmin(AdminDeps{
+				Agents: NewMockAgents(t), Workflows: NewMockWorkflows(t), Runs: runs, Tools: NewMockTools(t),
+				Schema: NewMockSchema(t), SchemaAdmin: NewMockSchemaAdmin(t),
+			})
+			session := connect(t, srv)
+			runs.EXPECT().List(mock.Anything, "", tt.want).Return([]domain.Run{}, nil).Once()
+			result := callTool(t, session, "list_runs", tt.arguments)
+			require.False(t, result.IsError)
+		})
+	}
+}
+
+func TestConsumerServerSurface(t *testing.T) {
+	t.Parallel()
+	srv, _ := NewConsumer(ConsumerDeps{Nodes: NewMockNodes(t), Edges: NewMockEdges(t), Schema: NewMockSchema(t)})
+	session := connect(t, srv)
+	listed, err := session.ListTools(context.Background(), nil)
+	require.NoError(t, err)
+	require.Len(t, listed.Tools, 15)
+	expected := []string{
+		"get_node", "list_nodes", "upsert_node", "delete_node", "search_nodes", "get_node_history",
+		"get_edge", "list_edges", "upsert_edge", "delete_edge", "get_edge_history",
+		"get_node_type", "list_node_types", "get_edge_type", "list_edge_types",
+	}
+	names := make(map[string]bool, len(listed.Tools))
+	for _, tool := range listed.Tools {
+		names[tool.Name] = true
+		assert.NotNil(t, tool.InputSchema, tool.Name)
+		assert.NotNil(t, tool.OutputSchema, tool.Name)
+		assert.False(t, *tool.Annotations.OpenWorldHint, tool.Name)
+	}
+	for _, name := range expected {
+		assert.Contains(t, names, name)
+	}
+	assert.NotContains(t, names, "create_node_type")
+	assert.NotContains(t, names, "create_edge_type")
+	assert.NotContains(t, names, "list_agents")
+	assert.NotContains(t, names, "search_edges")
+	assert.NotContains(t, names, "add_supported_by")
 }
 
 func connect(t *testing.T, srv *mcp.Server) *mcp.ClientSession {

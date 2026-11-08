@@ -229,7 +229,9 @@ func generalTools(a *App) ([]kit.Spec, error) {
 		func() ([]kit.Spec, error) { return kit.Specs(clock.Tools()) },
 		func() ([]kit.Spec, error) { return web.Specs(a.Search, nil) },
 		func() ([]kit.Spec, error) { return files.Specs(a.Workspace) },
-		func() ([]kit.Spec, error) { return kit.Specs(knowledge.Tools(&a.Knowledge)) },
+		func() ([]kit.Spec, error) { return kit.Specs(knowledge.NodeTools(&a.Knowledge)) },
+		func() ([]kit.Spec, error) { return kit.Specs(knowledge.EdgeTools(&a.Knowledge)) },
+		func() ([]kit.Spec, error) { return kit.Specs(knowledge.SchemaTools(&a.Knowledge)) },
 		func() ([]kit.Spec, error) { return []kit.Spec{agent.SubagentSpec()}, nil },
 	} {
 		specs, err := set()

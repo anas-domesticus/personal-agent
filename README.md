@@ -2,7 +2,7 @@
 
 A Postgres-backed knowledge and capability service that complements a personal agent.
 
-**Today, the implemented product is an orchestration and knowledge-graph MCP server, not a conversational assistant or question-answering interface.** Its 26 MCP tools manage agent definitions, DAG workflows, durable background runs and predefined knowledge nodes and relationships. The graph stores versioned objectives, workflows, claims, sources and agents, links claims to supporting sources, embeds every node's title and description, and supports deterministic node reads and semantic node search.
+**Today, the implemented product is an orchestration and knowledge-graph MCP server, not a conversational assistant or question-answering interface.** `/mcp` exposes 15 generic graph tools, while `/mcp/admin` provides 19 agent, workflow, run and tool-listing management operations plus graph schema discovery and dynamic type creation. The graph stores versioned objectives, workflows, claims, sources and agents, supports database-defined types and versioned edges, embeds every node's title and description, and supports deterministic graph reads and semantic node search.
 
 ## Product boundary and direction
 
@@ -12,15 +12,16 @@ That is the target boundary, not a claim that every capability exists today. The
 
 ## What it does now
 
-- Exposes 26 agent, workflow, run and knowledge operations through typed MCP tools.
+- Exposes a 15-tool consumer graph API at `/mcp` and management, schema-discovery and schema-creation operations at `/mcp/admin`.
 - Runs agentic DAG workflows in the background with River and records every step in Postgres.
 - Stores immutable agent and workflow versions, including promotion and rollback.
-- Registers versioned objective, workflow, claim, source and agent types plus the `supported_by` claim-to-source relationship in the Postgres graph. The graph module also supports constrained edges, rollback and externally defined enrichment handlers; the base schema registers no handlers.
-- Reads current knowledge nodes by kind and UUID, lists them deterministically with optional kind filtering, and searches them by semantic similarity. Changed nodes queue separate title and description embeddings.
+- Registers versioned objective, workflow, claim, source and agent types plus the `supported_by` claim-to-source relationship in the Postgres graph. The graph module also supports constrained versioned edges, rollback and externally defined enrichment handlers; the base schema registers no handlers.
+- Reads current nodes and edges, lists them with optional type or endpoint filters, and returns their immutable histories. Searches nodes by semantic similarity; changed nodes queue separate title and description embeddings.
+- Lets administrators create dynamic versioned node types and edge types with JSON Schemas and permitted endpoints, then use the same generic data tools for base and dynamic types.
 - Searches workflows by meaning and keywords with pgvector.
-- Gives workflow agents configurable file, shell, web, clock, knowledge-node and external MCP tools.
+- Gives workflow agents configurable file, shell, web, clock, generic graph and external MCP tools.
 
-The server has no authentication and only accepts loopback listen addresses. Do not expose it to an untrusted network. Its file and shell tools inherit the server's operating-system permissions, so use a container when stronger isolation is needed.
+Both servers have no authentication and only accept loopback listen addresses. `/mcp` and `/mcp/admin` separate capability exposure, not authentication or authorisation. Do not expose either endpoint to an untrusted network. File and shell tools inherit the server's operating-system permissions, so use a container when stronger isolation is needed.
 
 ## Running it
 
@@ -33,17 +34,19 @@ task up                # Postgres with pgvector
 task run               # migrate, start workers and serve MCP
 ```
 
-The endpoint is `http://127.0.0.1:7433/mcp`, using stateless Streamable HTTP. Configure an MCP client with that URL; no token or other credentials are needed. `MCP_LISTEN` changes the address.
+The consumer endpoint is `http://127.0.0.1:7433/mcp`; administration is at `http://127.0.0.1:7433/mcp/admin`. Both use unauthenticated, stateless Streamable HTTP over loopback. Configure MCP clients with the URL matching the capabilities they need; no token or other credentials are needed. `MCP_LISTEN` changes the address.
 
 `task install` puts the `orchestrator` binary on your PATH (in `GOBIN`, or `GOPATH/bin`). An installed binary reads settings from its environment, not `.env`. Set `MCP_CONFIG` and `WORKSPACE_DIR` to absolute paths because their defaults are relative to the working directory. `task uninstall` removes it.
 
 ## MCP tools
 
-- **Agents:** list and inspect agents, list their immutable versions newest first, create agents, append versions and promote or roll back versions. `list_tools` lists tools and configuration available to workflow-agent definitions.
-- **Workflows:** list, search, get, list versions, create, append versions, promote or roll back versions, update descriptions and delete.
-- **Runs:** start a workflow, optionally wait briefly, list recent runs and inspect durable node results.
+- **Agents (`/mcp/admin`):** list and inspect agents, list their immutable versions newest first, create agents, append versions and promote or roll back versions. `list_tools` lists tools and configuration available to workflow-agent definitions.
+- **Workflows (`/mcp/admin`):** list, search, get, list versions, create, append versions, promote or roll back versions, update descriptions and delete.
+- **Runs (`/mcp/admin`):** start a workflow, optionally wait briefly, list recent runs and inspect durable node results.
 
-- **Knowledge graph:** read a current node with `get_knowledge_node`; list current nodes in creation order with optional kind filtering using `list_knowledge_nodes`; create or update any predefined objective, workflow, claim, source or agent with `upsert_knowledge_node`; search current nodes by title or description meaning with `search_knowledge_nodes`. Add, list and delete claim-to-source support with `add_supported_by`, `list_supported_by` and `delete_supported_by`; support listing selects exactly one claim or source. Node list results default to 10 and are capped at 100.
+- **Consumer graph (`/mcp`):** use `get_node`, `list_nodes`, `upsert_node`, `delete_node`, `search_nodes` and `get_node_history` for nodes, and `get_edge`, `list_edges`, `upsert_edge`, `delete_edge` and `get_edge_history` for edges. `get_node_type`, `list_node_types`, `get_edge_type` and `list_edge_types` provide read-only schema discovery. All operations work across base and dynamic database-defined types. Nodes and edges have immutable histories, current versions, revisions and optional version metadata. Node and edge lists default to 10 and are capped at 100; histories default to 50 and are capped at 100. Deleting a connected node returns a conflict. There is no edge semantic search.
+- **Schema administration (`/mcp/admin`):** `create_node_type` and `create_edge_type` add dynamic types with JSON Schemas and permitted edge endpoints. The four schema-discovery tools are also available here. Schema definitions have no history or mutation API, and incompatible schema evolution is unsupported.
+- **Native tools:** every consumer graph tool has a same-named native equivalent for workflow agents. Native schema discovery is read-only; native schema mutation does not exist. Knowledge agent and workflow records remain descriptive graph data, separate from the runnable catalogues.
 
 Ask a Question is not implemented.
 

@@ -51,6 +51,27 @@ type Edge[T any] struct {
 	UpdatedAt time.Time `json:"updated_at"`
 }
 
+// VersionedEdge composes current edge state with its version pointer.
+type VersionedEdge[T any] struct {
+	Edge[T]
+	CurrentVersion int64 `json:"current_version"`
+}
+
+// EdgeVersion is one immutable edge snapshot.
+type EdgeVersion[T any] struct {
+	EdgeID    uuid.UUID       `json:"edge_id"`
+	Version   int64           `json:"version"`
+	Data      T               `json:"data"`
+	Metadata  json.RawMessage `json:"metadata"`
+	CreatedAt time.Time       `json:"created_at"`
+}
+
+// EdgeVersionHistory is a newest-first page of immutable edge snapshots.
+type EdgeVersionHistory[T any] struct {
+	Versions   []EdgeVersion[T] `json:"versions"`
+	NextBefore int64            `json:"next_before,omitempty"`
+}
+
 // Endpoint permits an edge kind to connect two registered node kinds.
 type Endpoint struct {
 	Source string `json:"source"`
@@ -80,6 +101,12 @@ type WriteOptions struct {
 // NodeWriteOptions controls a node write. Metadata is stored on a newly
 // appended version and is ignored for ordinary nodes.
 type NodeWriteOptions struct {
+	WriteOptions
+	Metadata json.RawMessage `json:"metadata,omitempty"`
+}
+
+// EdgeWriteOptions controls an edge write and its immutable version metadata.
+type EdgeWriteOptions struct {
 	WriteOptions
 	Metadata json.RawMessage `json:"metadata,omitempty"`
 }

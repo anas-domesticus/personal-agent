@@ -17,8 +17,9 @@ import (
 func TestWorkflowVersionAndDelete(t *testing.T) {
 	t.Parallel()
 	workflows := NewMockWorkflows(t)
-	srv, _ := New(Deps{
+	srv, _ := NewAdmin(AdminDeps{
 		Agents: NewMockAgents(t), Workflows: workflows, Runs: NewMockRuns(t), Tools: NewMockTools(t),
+		Schema: NewMockSchema(t), SchemaAdmin: NewMockSchemaAdmin(t),
 	})
 	session := connect(t, srv)
 	id := uuid.New()
@@ -48,8 +49,9 @@ func TestWorkflowVersionAndDelete(t *testing.T) {
 func TestRunWaitAndTranscripts(t *testing.T) {
 	t.Parallel()
 	runs := NewMockRuns(t)
-	srv, _ := New(Deps{
+	srv, _ := NewAdmin(AdminDeps{
 		Agents: NewMockAgents(t), Workflows: NewMockWorkflows(t), Runs: runs, Tools: NewMockTools(t),
+		Schema: NewMockSchema(t), SchemaAdmin: NewMockSchemaAdmin(t),
 	})
 	session := connect(t, srv)
 	id := uuid.New()

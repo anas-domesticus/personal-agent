@@ -44,16 +44,16 @@ type Conversation struct {
 }
 
 type GraphEdge struct {
-	ID         uuid.UUID       `json:"id"`
-	Kind       string          `json:"kind"`
-	SourceID   uuid.UUID       `json:"source_id"`
-	SourceKind string          `json:"source_kind"`
-	TargetID   uuid.UUID       `json:"target_id"`
-	TargetKind string          `json:"target_kind"`
-	Data       json.RawMessage `json:"data"`
-	Revision   int64           `json:"revision"`
-	CreatedAt  time.Time       `json:"created_at"`
-	UpdatedAt  time.Time       `json:"updated_at"`
+	ID             uuid.UUID `json:"id"`
+	Kind           string    `json:"kind"`
+	SourceID       uuid.UUID `json:"source_id"`
+	SourceKind     string    `json:"source_kind"`
+	TargetID       uuid.UUID `json:"target_id"`
+	TargetKind     string    `json:"target_kind"`
+	Revision       int64     `json:"revision"`
+	CreatedAt      time.Time `json:"created_at"`
+	UpdatedAt      time.Time `json:"updated_at"`
+	CurrentVersion int64     `json:"current_version"`
 }
 
 type GraphEdgeType struct {
@@ -67,6 +67,14 @@ type GraphEdgeTypeEndpoint struct {
 	EdgeKind   string `json:"edge_kind"`
 	SourceKind string `json:"source_kind"`
 	TargetKind string `json:"target_kind"`
+}
+
+type GraphEdgeVersion struct {
+	EdgeID    uuid.UUID       `json:"edge_id"`
+	Version   int64           `json:"version"`
+	Data      json.RawMessage `json:"data"`
+	Metadata  json.RawMessage `json:"metadata"`
+	CreatedAt time.Time       `json:"created_at"`
 }
 
 type GraphNode struct {

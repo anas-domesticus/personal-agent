@@ -13,11 +13,8 @@ import (
 // SearchNodes finds current nodes by their closest title or description vector.
 func (g *Graph) SearchNodes(ctx context.Context, kind string, embedding pgvector.Vector, model string, limit int32) ([]domain.KnowledgeNodeMatch, error) {
 	if kind != "" {
-		g.mu.RLock()
-		_, ok := g.nodes[kind]
-		g.mu.RUnlock()
-		if !ok {
-			return nil, fmt.Errorf("graph node kind %q: %w", kind, domain.ErrNotFound)
+		if _, err := g.store.GetGraphNodeType(ctx, kind); err != nil {
+			return nil, graphError(err, "graph node kind")
 		}
 	}
 	limit = nodeLimit(limit)
@@ -31,7 +28,7 @@ func (g *Graph) SearchNodes(ctx context.Context, kind string, embedding pgvector
 	for i, row := range rows {
 		out[i] = domain.KnowledgeNodeMatch{
 			KnowledgeNode: domain.KnowledgeNode{
-				ID: row.ID, Kind: row.Kind, Revision: row.Revision,
+				ID: row.ID, Kind: row.Kind, CurrentVersion: row.CurrentVersion, Revision: row.Revision,
 				Title: row.Title, Description: row.Description, Data: row.Data,
 				CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt,
 			},

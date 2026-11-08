@@ -3,7 +3,6 @@ package app
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 
 	"github.com/cloudwego/eino/components/embedding"
@@ -15,8 +14,8 @@ import (
 	"github.com/anas-domesticus/personal-agent/internal/knowledge"
 )
 
-// Knowledge contains the versioned graph repositories for the base knowledge
-// schema. These are internal services and are not automatically MCP tools.
+// Knowledge contains the base repositories and the dynamic graph service.
+// Typed repositories support application code; tools use the generic methods.
 type Knowledge struct {
 	Objectives  *graph.VersionedNodeRepository[knowledge.Objective]
 	Workflows   *graph.VersionedNodeRepository[knowledge.Workflow]
@@ -70,25 +69,30 @@ func registerKnowledge(ctx context.Context, g *graph.Graph, embedder embedding.E
 	return out, nil
 }
 
-// Get returns a predefined node's current raw data.
-func (k *Knowledge) Get(ctx context.Context, kind string, id uuid.UUID) (domain.KnowledgeNode, error) {
+// GetNode returns a registered node's current raw data.
+func (k *Knowledge) GetNode(ctx context.Context, kind string, id uuid.UUID) (domain.KnowledgeNode, error) {
 	return k.graph.GetNode(ctx, kind, id)
 }
 
-// List returns current raw node data, optionally restricted to one kind.
-func (k *Knowledge) List(ctx context.Context, kind string, limit int32) ([]domain.KnowledgeNode, error) {
+// ListNodes returns current raw node data, optionally restricted to one kind.
+func (k *Knowledge) ListNodes(ctx context.Context, kind string, limit int32) ([]domain.KnowledgeNode, error) {
 	return k.graph.ListNodes(ctx, kind, limit)
 }
 
-// Upsert writes a predefined node through its registered typed repository.
-func (k *Knowledge) Upsert(ctx context.Context, kind string, id uuid.UUID, data json.RawMessage, expectedRevision *int64) (domain.KnowledgeNode, error) {
+// UpsertNode writes a node through its registered typed or dynamic schema.
+func (k *Knowledge) UpsertNode(ctx context.Context, kind string, id uuid.UUID, data, metadata json.RawMessage, expectedRevision *int64) (domain.KnowledgeNode, error) {
 	return k.graph.UpsertNode(ctx, kind, id, data, graph.NodeWriteOptions{
-		WriteOptions: graph.WriteOptions{ExpectedRevision: expectedRevision},
+		WriteOptions: graph.WriteOptions{ExpectedRevision: expectedRevision}, Metadata: metadata,
 	})
 }
 
-// Search finds predefined nodes by semantic similarity to title or description.
-func (k *Knowledge) Search(ctx context.Context, kind, query string, limit int32) ([]domain.KnowledgeNodeMatch, error) {
+// DeleteNode removes a node when no edges reference it.
+func (k *Knowledge) DeleteNode(ctx context.Context, kind string, id uuid.UUID, expectedRevision *int64) error {
+	return k.graph.DeleteNode(ctx, kind, id, graph.WriteOptions{ExpectedRevision: expectedRevision})
+}
+
+// SearchNodes finds nodes by semantic similarity to title or description.
+func (k *Knowledge) SearchNodes(ctx context.Context, kind, query string, limit int32) ([]domain.KnowledgeNodeMatch, error) {
 	if k.embedder == nil {
 		return nil, fmt.Errorf("knowledge node search: %w", domain.ErrUnavailable)
 	}
@@ -99,63 +103,68 @@ func (k *Knowledge) Search(ctx context.Context, kind, query string, limit int32)
 	return k.graph.SearchNodes(ctx, kind, vector, k.model, limit)
 }
 
-// AddSupportedBy creates or returns the relationship from a claim to a source.
-func (k *Knowledge) AddSupportedBy(ctx context.Context, claimID, sourceID uuid.UUID) (domain.KnowledgeEdge, error) {
-	edge, err := k.SupportedBy.Upsert(ctx,
-		graph.Ref{ID: claimID, Kind: knowledge.ClaimKind},
-		graph.Ref{ID: sourceID, Kind: knowledge.SourceKind},
-		knowledge.SupportedBy{}, graph.WriteOptions{},
-	)
-	if errors.Is(err, domain.ErrExists) {
-		edge, err = k.SupportedBy.Between(ctx, claimID, sourceID)
-	}
-	if err != nil {
-		return domain.KnowledgeEdge{}, err
-	}
-	return supportedByEdge(edge)
+// NodeHistory returns immutable node snapshots newest first.
+func (k *Knowledge) NodeHistory(ctx context.Context, kind string, id uuid.UUID, before int64, limit int) (domain.KnowledgeNodeHistory, error) {
+	return k.graph.NodeHistory(ctx, kind, id, graph.HistoryOptions{Before: before, Limit: limit})
 }
 
-// DeleteSupportedBy removes a support relationship by edge ID.
-func (k *Knowledge) DeleteSupportedBy(ctx context.Context, edgeID uuid.UUID) error {
-	return k.SupportedBy.Delete(ctx, edgeID)
+// GetEdge returns a registered edge's current raw data.
+func (k *Knowledge) GetEdge(ctx context.Context, kind string, id uuid.UUID) (domain.KnowledgeEdge, error) {
+	return k.graph.GetEdge(ctx, kind, id)
 }
 
-// ListSupportedBy lists relationships for exactly one claim or source selector.
-func (k *Knowledge) ListSupportedBy(ctx context.Context, claimID, sourceID uuid.UUID) ([]domain.KnowledgeEdge, error) {
-	if (claimID == uuid.Nil) == (sourceID == uuid.Nil) {
-		return nil, fmt.Errorf("exactly one supported_by selector is required")
-	}
-	var (
-		edges []graph.Edge[knowledge.SupportedBy]
-		err   error
-	)
-	if claimID != uuid.Nil {
-		edges, err = k.SupportedBy.From(ctx, claimID)
-	} else {
-		edges, err = k.SupportedBy.To(ctx, sourceID)
-	}
-	if err != nil {
-		return nil, err
-	}
-	out := make([]domain.KnowledgeEdge, len(edges))
-	for i, edge := range edges {
-		out[i], err = supportedByEdge(edge)
-		if err != nil {
-			return nil, err
-		}
-	}
-	return out, nil
+// ListEdges returns current edges filtered by kind or either endpoint.
+func (k *Knowledge) ListEdges(ctx context.Context, kind string, sourceID, targetID uuid.UUID, limit int32) ([]domain.KnowledgeEdge, error) {
+	return k.graph.ListEdges(ctx, kind, sourceID, targetID, limit)
 }
 
-func supportedByEdge(edge graph.Edge[knowledge.SupportedBy]) (domain.KnowledgeEdge, error) {
-	data, err := json.Marshal(edge.Data)
-	if err != nil {
-		return domain.KnowledgeEdge{}, fmt.Errorf("encode graph edge data: %w", err)
+// UpsertEdge writes an edge through its registered typed or dynamic schema.
+func (k *Knowledge) UpsertEdge(ctx context.Context, kind string, source, target domain.KnowledgeRef, data, metadata json.RawMessage, expectedRevision *int64) (domain.KnowledgeEdge, error) {
+	return k.graph.UpsertEdge(ctx, kind, graph.Ref{ID: source.ID, Kind: source.Kind}, graph.Ref{ID: target.ID, Kind: target.Kind}, data, graph.EdgeWriteOptions{
+		WriteOptions: graph.WriteOptions{ExpectedRevision: expectedRevision}, Metadata: metadata,
+	})
+}
+
+// DeleteEdge removes an edge and its immutable history.
+func (k *Knowledge) DeleteEdge(ctx context.Context, kind string, id uuid.UUID, expectedRevision *int64) error {
+	return k.graph.DeleteEdge(ctx, kind, id, graph.WriteOptions{ExpectedRevision: expectedRevision})
+}
+
+// EdgeHistory returns immutable edge snapshots newest first.
+func (k *Knowledge) EdgeHistory(ctx context.Context, kind string, id uuid.UUID, before int64, limit int) (domain.KnowledgeEdgeHistory, error) {
+	return k.graph.EdgeHistory(ctx, kind, id, graph.HistoryOptions{Before: before, Limit: limit})
+}
+
+// GetNodeType returns a persisted node schema.
+func (k *Knowledge) GetNodeType(ctx context.Context, kind string) (domain.KnowledgeNodeType, error) {
+	return k.graph.GetNodeType(ctx, kind)
+}
+
+// ListNodeTypes returns every persisted node schema.
+func (k *Knowledge) ListNodeTypes(ctx context.Context) ([]domain.KnowledgeNodeType, error) {
+	return k.graph.ListNodeTypes(ctx)
+}
+
+// GetEdgeType returns a persisted edge schema and its permitted endpoints.
+func (k *Knowledge) GetEdgeType(ctx context.Context, kind string) (domain.KnowledgeEdgeType, error) {
+	return k.graph.GetEdgeType(ctx, kind)
+}
+
+// ListEdgeTypes returns every persisted edge schema.
+func (k *Knowledge) ListEdgeTypes(ctx context.Context) ([]domain.KnowledgeEdgeType, error) {
+	return k.graph.ListEdgeTypes(ctx)
+}
+
+// CreateNodeType adds a versioned dynamic node schema.
+func (k *Knowledge) CreateNodeType(ctx context.Context, kind string, dataSchema json.RawMessage) (domain.KnowledgeNodeType, error) {
+	return k.graph.CreateNodeType(ctx, kind, dataSchema)
+}
+
+// CreateEdgeType adds a dynamic edge schema and its permitted endpoints.
+func (k *Knowledge) CreateEdgeType(ctx context.Context, kind string, dataSchema json.RawMessage, endpoints []domain.KnowledgeEndpoint) (domain.KnowledgeEdgeType, error) {
+	converted := make([]graph.Endpoint, len(endpoints))
+	for i, endpoint := range endpoints {
+		converted[i] = graph.Endpoint{Source: endpoint.Source, Target: endpoint.Target}
 	}
-	return domain.KnowledgeEdge{
-		ID: edge.ID, Kind: edge.Kind,
-		SourceID: edge.Source.ID, SourceKind: edge.Source.Kind,
-		TargetID: edge.Target.ID, TargetKind: edge.Target.Kind,
-		Data: data, Revision: edge.Revision, CreatedAt: edge.CreatedAt, UpdatedAt: edge.UpdatedAt,
-	}, nil
+	return k.graph.CreateEdgeType(ctx, kind, dataSchema, converted)
 }

@@ -3,11 +3,9 @@ package graph
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
 
 	"github.com/anas-domesticus/personal-agent/internal/domain"
 	"github.com/anas-domesticus/personal-agent/internal/store/db"
@@ -30,11 +28,60 @@ func (r *EdgeRepository[T]) Definition() EdgeType {
 
 // Get returns an edge by ID.
 func (r *EdgeRepository[T]) Get(ctx context.Context, id uuid.UUID) (Edge[T], error) {
-	row, err := r.graph.store.GetGraphEdge(ctx, db.GetGraphEdgeParams{ID: id, Kind: r.kind})
+	edge, err := r.graph.GetEdge(ctx, r.kind, id)
 	if err != nil {
-		return Edge[T]{}, graphError(err, "graph edge")
+		return Edge[T]{}, err
 	}
-	return r.fromRow(row)
+	return typedEdge[T](edge)
+}
+
+// Current returns current data together with the immutable version number.
+func (r *EdgeRepository[T]) Current(ctx context.Context, id uuid.UUID) (VersionedEdge[T], error) {
+	edge, err := r.graph.GetEdge(ctx, r.kind, id)
+	if err != nil {
+		return VersionedEdge[T]{}, err
+	}
+	typed, err := typedEdge[T](edge)
+	if err != nil {
+		return VersionedEdge[T]{}, err
+	}
+	return VersionedEdge[T]{Edge: typed, CurrentVersion: edge.CurrentVersion}, nil
+}
+
+// Version returns one immutable historical edge snapshot.
+func (r *EdgeRepository[T]) Version(ctx context.Context, id uuid.UUID, version int64) (EdgeVersion[T], error) {
+	if _, err := r.graph.GetEdge(ctx, r.kind, id); err != nil {
+		return EdgeVersion[T]{}, err
+	}
+	row, err := r.graph.store.GetGraphEdgeVersion(ctx, db.GetGraphEdgeVersionParams{EdgeID: id, Version: version})
+	if err != nil {
+		return EdgeVersion[T]{}, graphError(err, "graph edge version")
+	}
+	data, err := decode[T](row.Data)
+	if err != nil {
+		return EdgeVersion[T]{}, err
+	}
+	return EdgeVersion[T]{EdgeID: row.EdgeID, Version: row.Version, Data: data, Metadata: row.Metadata, CreatedAt: row.CreatedAt}, nil
+}
+
+// Versions returns immutable edge snapshots newest first.
+func (r *EdgeRepository[T]) Versions(ctx context.Context, id uuid.UUID, opts HistoryOptions) (EdgeVersionHistory[T], error) {
+	history, err := r.graph.EdgeHistory(ctx, r.kind, id, opts)
+	if err != nil {
+		return EdgeVersionHistory[T]{}, err
+	}
+	out := EdgeVersionHistory[T]{Versions: make([]EdgeVersion[T], 0, len(history.Versions)), NextBefore: history.NextBefore}
+	for _, version := range history.Versions {
+		data, err := decode[T](version.Data)
+		if err != nil {
+			return EdgeVersionHistory[T]{}, err
+		}
+		out.Versions = append(out.Versions, EdgeVersion[T]{
+			EdgeID: version.EdgeID, Version: version.Version, Data: data,
+			Metadata: version.Metadata, CreatedAt: version.CreatedAt,
+		})
+	}
+	return out, nil
 }
 
 // Between returns the unique edge of this kind between source and target.
@@ -45,7 +92,12 @@ func (r *EdgeRepository[T]) Between(ctx context.Context, source, target uuid.UUI
 	if err != nil {
 		return Edge[T]{}, graphError(err, "graph edge")
 	}
-	return r.fromRow(row)
+	return typedEdge[T](domain.KnowledgeEdge{
+		ID: row.ID, Kind: row.Kind, CurrentVersion: row.CurrentVersion,
+		SourceID: row.SourceID, SourceKind: row.SourceKind,
+		TargetID: row.TargetID, TargetKind: row.TargetKind,
+		Data: row.Data, Revision: row.Revision, CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt,
+	})
 }
 
 // Upsert creates or updates the unique edge of this kind between two nodes.
@@ -55,9 +107,6 @@ func (r *EdgeRepository[T]) Upsert(ctx context.Context, source, target Ref, data
 	if !r.permitted[endpoint] {
 		return Edge[T]{}, fmt.Errorf("edge %q does not permit %q to %q: %w", r.kind, source.Kind, target.Kind, domain.ErrConflict)
 	}
-	if source.ID == uuid.Nil || target.ID == uuid.Nil {
-		return Edge[T]{}, errors.New("edge endpoints require node IDs")
-	}
 	raw, err := json.Marshal(data)
 	if err != nil {
 		return Edge[T]{}, fmt.Errorf("encode graph edge: %w", err)
@@ -65,109 +114,99 @@ func (r *EdgeRepository[T]) Upsert(ctx context.Context, source, target Ref, data
 	if err := r.validate(data, raw); err != nil {
 		return Edge[T]{}, err
 	}
+	edge, err := r.graph.upsertEdge(ctx, r.kind, source, target, raw, EdgeWriteOptions{WriteOptions: opts})
+	if err != nil {
+		return Edge[T]{}, err
+	}
+	return typedEdge[T](edge)
+}
 
-	var out Edge[T]
-	err = r.graph.store.InTx(ctx, func(q *db.Queries, tx pgx.Tx) error {
-		row, err := q.GetGraphEdgeBetweenForUpdate(ctx, db.GetGraphEdgeBetweenForUpdateParams{
-			Kind: r.kind, SourceID: source.ID, TargetID: target.ID,
-		})
-		if errors.Is(err, pgx.ErrNoRows) {
-			if opts.ExpectedRevision != nil {
-				return fmt.Errorf("new edge has an expected revision: %w", domain.ErrConflict)
-			}
-			row, err = q.InsertGraphEdge(ctx, db.InsertGraphEdgeParams{
-				ID: uuid.New(), Kind: r.kind,
-				SourceID: source.ID, SourceKind: source.Kind,
-				TargetID: target.ID, TargetKind: target.Kind, Data: raw,
-			})
-			if err != nil {
-				return graphError(err, "insert graph edge")
-			}
-			out, err = r.fromRow(row)
-			if err != nil {
-				return err
-			}
-			return r.graph.queue(ctx, tx, EnrichmentArgs{Entity: EntityEdge, Type: r.kind, ID: row.ID, Revision: row.Revision})
-		}
-		if err != nil {
-			return fmt.Errorf("lock graph edge: %w", err)
-		}
-		if row.SourceKind != source.Kind || row.TargetKind != target.Kind {
-			return fmt.Errorf("edge endpoint kinds cannot change: %w", domain.ErrConflict)
-		}
-		if err := checkRevision(row.Revision, opts); err != nil {
-			return err
-		}
-		if equalJSON(row.Data, raw) {
-			out, err = r.fromRow(row)
-			return err
-		}
-		row, err = q.UpdateGraphEdgeData(ctx, db.UpdateGraphEdgeDataParams{
-			ID: row.ID, Kind: r.kind, SourceID: source.ID, Data: raw,
-		})
-		if err != nil {
-			return fmt.Errorf("update graph edge: %w", err)
-		}
-		out, err = r.fromRow(row)
-		if err != nil {
-			return err
-		}
-		return r.graph.queue(ctx, tx, EnrichmentArgs{Entity: EntityEdge, Type: r.kind, ID: row.ID, Revision: row.Revision})
-	})
-	return out, err
+// UpsertVersion is equivalent to Upsert and additionally stores version
+// metadata on a newly appended immutable snapshot.
+func (r *EdgeRepository[T]) UpsertVersion(ctx context.Context, source, target Ref, data T, opts EdgeWriteOptions) (VersionedEdge[T], error) {
+	endpoint := Endpoint{Source: source.Kind, Target: target.Kind}
+	if !r.permitted[endpoint] {
+		return VersionedEdge[T]{}, fmt.Errorf("edge %q does not permit %q to %q: %w", r.kind, source.Kind, target.Kind, domain.ErrConflict)
+	}
+	raw, err := json.Marshal(data)
+	if err != nil {
+		return VersionedEdge[T]{}, fmt.Errorf("encode graph edge: %w", err)
+	}
+	if err := r.validate(data, raw); err != nil {
+		return VersionedEdge[T]{}, err
+	}
+	edge, err := r.graph.upsertEdge(ctx, r.kind, source, target, raw, opts)
+	if err != nil {
+		return VersionedEdge[T]{}, err
+	}
+	typed, err := typedEdge[T](edge)
+	if err != nil {
+		return VersionedEdge[T]{}, err
+	}
+	return VersionedEdge[T]{Edge: typed, CurrentVersion: edge.CurrentVersion}, nil
 }
 
 // Delete removes an edge by ID.
 func (r *EdgeRepository[T]) Delete(ctx context.Context, id uuid.UUID) error {
-	count, err := r.graph.store.DeleteGraphEdge(ctx, db.DeleteGraphEdgeParams{ID: id, Kind: r.kind})
-	if err != nil {
-		return fmt.Errorf("delete graph edge: %w", err)
-	}
-	if count == 0 {
-		return fmt.Errorf("graph edge %s: %w", id, domain.ErrNotFound)
-	}
-	return nil
+	return r.graph.DeleteEdge(ctx, r.kind, id, WriteOptions{})
 }
 
-// From lists outgoing edges of this kind in creation order.
+// DeleteRevision removes an edge after checking its optimistic revision.
+func (r *EdgeRepository[T]) DeleteRevision(ctx context.Context, id uuid.UUID, opts WriteOptions) error {
+	return r.graph.DeleteEdge(ctx, r.kind, id, opts)
+}
+
+// From lists all outgoing edges of this kind in creation order.
 func (r *EdgeRepository[T]) From(ctx context.Context, source uuid.UUID) ([]Edge[T], error) {
 	rows, err := r.graph.store.ListGraphEdgesFrom(ctx, db.ListGraphEdgesFromParams{Kind: r.kind, SourceID: source})
 	if err != nil {
 		return nil, fmt.Errorf("list outgoing graph edges: %w", err)
 	}
-	return r.fromRows(rows)
+	out := make([]Edge[T], len(rows))
+	for i, row := range rows {
+		out[i], err = typedEdge[T](domain.KnowledgeEdge{
+			ID: row.ID, Kind: row.Kind, CurrentVersion: row.CurrentVersion,
+			SourceID: row.SourceID, SourceKind: row.SourceKind,
+			TargetID: row.TargetID, TargetKind: row.TargetKind,
+			Data: row.Data, Revision: row.Revision, CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt,
+		})
+		if err != nil {
+			return nil, err
+		}
+	}
+	return out, nil
 }
 
-// To lists incoming edges of this kind in creation order.
+// To lists all incoming edges of this kind in creation order.
 func (r *EdgeRepository[T]) To(ctx context.Context, target uuid.UUID) ([]Edge[T], error) {
 	rows, err := r.graph.store.ListGraphEdgesTo(ctx, db.ListGraphEdgesToParams{Kind: r.kind, TargetID: target})
 	if err != nil {
 		return nil, fmt.Errorf("list incoming graph edges: %w", err)
 	}
-	return r.fromRows(rows)
-}
-
-func (r *EdgeRepository[T]) fromRows(rows []db.GraphEdge) ([]Edge[T], error) {
 	out := make([]Edge[T], len(rows))
 	for i, row := range rows {
-		edge, err := r.fromRow(row)
+		out[i], err = typedEdge[T](domain.KnowledgeEdge{
+			ID: row.ID, Kind: row.Kind, CurrentVersion: row.CurrentVersion,
+			SourceID: row.SourceID, SourceKind: row.SourceKind,
+			TargetID: row.TargetID, TargetKind: row.TargetKind,
+			Data: row.Data, Revision: row.Revision, CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt,
+		})
 		if err != nil {
 			return nil, err
 		}
-		out[i] = edge
 	}
 	return out, nil
 }
 
-func (r *EdgeRepository[T]) fromRow(row db.GraphEdge) (Edge[T], error) {
-	data, err := decode[T](row.Data)
+func typedEdge[T any](edge domain.KnowledgeEdge) (Edge[T], error) {
+	data, err := decode[T](edge.Data)
 	if err != nil {
 		return Edge[T]{}, err
 	}
 	return Edge[T]{
-		ID: row.ID, Kind: row.Kind,
-		Source: Ref{ID: row.SourceID, Kind: row.SourceKind},
-		Target: Ref{ID: row.TargetID, Kind: row.TargetKind},
-		Data:   data, Revision: row.Revision, CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt,
+		ID: edge.ID, Kind: edge.Kind,
+		Source: Ref{ID: edge.SourceID, Kind: edge.SourceKind},
+		Target: Ref{ID: edge.TargetID, Kind: edge.TargetKind},
+		Data:   data, Revision: edge.Revision, CreatedAt: edge.CreatedAt, UpdatedAt: edge.UpdatedAt,
 	}, nil
 }

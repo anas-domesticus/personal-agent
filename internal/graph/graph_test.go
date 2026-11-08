@@ -281,8 +281,8 @@ func TestEdgesAndDatabaseConstraints(t *testing.T) {
 	require.ErrorIs(t, err, domain.ErrConflict)
 
 	_, err = st.Pool.Exec(context.Background(), `
-		insert into graph_edges (kind, source_id, source_kind, target_id, target_kind, data)
-		values ('knows', $1, 'person', $2, 'person', '{}')`, tag.ID, grace.ID)
+		insert into graph_edges (kind, source_id, source_kind, target_id, target_kind, current_version)
+		values ('knows', $1, 'person', $2, 'person', 1)`, tag.ID, grace.ID)
 	require.Error(t, err)
 	var pgErr interface{ SQLState() string }
 	if errors.As(err, &pgErr) {
@@ -303,6 +303,76 @@ func TestEdgesAndDatabaseConstraints(t *testing.T) {
 	require.NoError(t, people.Delete(context.Background(), ada.ID))
 	assert.Len(t, jobs.recorded(), 5)
 	assert.Len(t, jobs.recordedEmbeddings(), 3)
+}
+
+func TestTypedEdgeFromToAreUnlimited(t *testing.T) {
+	t.Parallel()
+	_, g, _ := newGraph(t)
+	ctx := context.Background()
+	people, err := graph.RegisterNode(ctx, g, graph.NodeSpec[person]{Kind: "person"})
+	require.NoError(t, err)
+	edges, err := graph.RegisterEdge(ctx, g, graph.EdgeSpec[relationship]{
+		Kind: "knows", Endpoints: []graph.Endpoint{{Source: "person", Target: "person"}},
+	})
+	require.NoError(t, err)
+	nodes := make([]graph.Node[person], 102)
+	for i := range nodes {
+		nodes[i], err = people.Upsert(ctx, uuid.Nil, person{Name: "Person"}, graph.NodeWriteOptions{})
+		require.NoError(t, err)
+	}
+	for i := 1; i < len(nodes); i++ {
+		_, err = edges.Upsert(ctx, nodes[0].Ref, nodes[i].Ref, relationship{Since: i}, graph.WriteOptions{})
+		require.NoError(t, err)
+		_, err = edges.Upsert(ctx, nodes[i].Ref, nodes[0].Ref, relationship{Since: i}, graph.WriteOptions{})
+		require.NoError(t, err)
+	}
+	outgoing, err := edges.From(ctx, nodes[0].ID)
+	require.NoError(t, err)
+	assert.Len(t, outgoing, 101)
+	incoming, err := edges.To(ctx, nodes[0].ID)
+	require.NoError(t, err)
+	assert.Len(t, incoming, 101)
+}
+
+func TestTypedEdgeVersions(t *testing.T) {
+	t.Parallel()
+	_, g, jobs := newGraph(t)
+	ctx := context.Background()
+	people, err := graph.RegisterNode(ctx, g, graph.NodeSpec[person]{Kind: "person"})
+	require.NoError(t, err)
+	edges, err := graph.RegisterEdge(ctx, g, graph.EdgeSpec[relationship]{
+		Kind: "knows", Endpoints: []graph.Endpoint{{Source: "person", Target: "person"}},
+	})
+	require.NoError(t, err)
+	ada, err := people.Upsert(ctx, uuid.Nil, person{Name: "Ada"}, graph.NodeWriteOptions{})
+	require.NoError(t, err)
+	grace, err := people.Upsert(ctx, uuid.Nil, person{Name: "Grace"}, graph.NodeWriteOptions{})
+	require.NoError(t, err)
+	created, err := edges.UpsertVersion(ctx, ada.Ref, grace.Ref, relationship{Since: 1840}, graph.EdgeWriteOptions{})
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), created.CurrentVersion)
+	updated, err := edges.UpsertVersion(ctx, ada.Ref, grace.Ref, relationship{Since: 1843}, graph.EdgeWriteOptions{
+		Metadata: []byte(`{"reason":"dated"}`),
+	})
+	require.NoError(t, err)
+	assert.Equal(t, int64(2), updated.CurrentVersion)
+	current, err := edges.Current(ctx, created.ID)
+	require.NoError(t, err)
+	assert.Equal(t, updated, current)
+	version, err := edges.Version(ctx, created.ID, 1)
+	require.NoError(t, err)
+	assert.Equal(t, relationship{Since: 1840}, version.Data)
+	history, err := edges.Versions(ctx, created.ID, graph.HistoryOptions{Limit: 1})
+	require.NoError(t, err)
+	require.Len(t, history.Versions, 1)
+	assert.Equal(t, int64(2), history.Versions[0].Version)
+	assert.JSONEq(t, `{"reason":"dated"}`, string(history.Versions[0].Metadata))
+	assert.Equal(t, int64(2), history.NextBefore)
+	older, err := edges.Versions(ctx, created.ID, graph.HistoryOptions{Before: history.NextBefore})
+	require.NoError(t, err)
+	require.Len(t, older.Versions, 1)
+	assert.Equal(t, relationship{Since: 1840}, older.Versions[0].Data)
+	assert.Len(t, jobs.recorded(), 4)
 }
 
 func TestEnrichmentHandlersAndStaleJobs(t *testing.T) {
@@ -414,7 +484,7 @@ func TestGraphMigrationDown(t *testing.T) {
 	t.Cleanup(func() { require.NoError(t, database.Close()) })
 	provider, err := goose.NewProvider(goose.DialectPostgres, database, os.DirFS("../store/migrations"))
 	require.NoError(t, err)
-	for range 2 {
+	for range 3 {
 		_, err = provider.Down(context.Background())
 		require.NoError(t, err)
 	}

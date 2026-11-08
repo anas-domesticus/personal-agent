@@ -1,84 +1,81 @@
-// Package knowledge provides native tools for writing and searching the
-// application's predefined knowledge nodes.
+// Package knowledge provides native tools for reading and writing the
+// application's knowledge graph.
 package knowledge
 
 import (
 	"context"
-	_ "embed"
 	"encoding/json"
 	"fmt"
 
-	"github.com/cloudwego/eino/components/tool"
 	"github.com/google/uuid"
 
 	"github.com/anas-domesticus/personal-agent/internal/domain"
-	"github.com/anas-domesticus/personal-agent/internal/tools/kit"
 )
 
-var (
-	//go:embed desc/upsert_knowledge_node.md
-	upsertDesc string
-	//go:embed desc/search_knowledge_nodes.md
-	searchDesc string
-)
-
-// Store writes and searches predefined knowledge nodes. *app.Knowledge implements it.
-type Store interface {
-	Upsert(ctx context.Context, kind string, id uuid.UUID, data json.RawMessage, expectedRevision *int64) (domain.KnowledgeNode, error)
-	Search(ctx context.Context, kind, query string, limit int32) ([]domain.KnowledgeNodeMatch, error)
+// Nodes is the consumer contract used by the native knowledge-node tools.
+type Nodes interface {
+	GetNode(ctx context.Context, kind string, id uuid.UUID) (domain.KnowledgeNode, error)
+	ListNodes(ctx context.Context, kind string, limit int32) ([]domain.KnowledgeNode, error)
+	UpsertNode(ctx context.Context, kind string, id uuid.UUID, data, metadata json.RawMessage, expectedRevision *int64) (domain.KnowledgeNode, error)
+	DeleteNode(ctx context.Context, kind string, id uuid.UUID, expectedRevision *int64) error
+	SearchNodes(ctx context.Context, kind, query string, limit int32) ([]domain.KnowledgeNodeMatch, error)
+	NodeHistory(ctx context.Context, kind string, id uuid.UUID, before int64, limit int) (domain.KnowledgeNodeHistory, error)
 }
 
-// Tools returns the native knowledge-node upsert and semantic-search tools.
-func Tools(store Store) ([]tool.InvokableTool, error) {
-	return kit.Build(
-		func() (tool.InvokableTool, error) {
-			return kit.New("upsert_knowledge_node", upsertDesc, func(ctx context.Context, in upsertInput) (domain.KnowledgeNode, error) {
-				return upsert(ctx, store, in)
-			})
-		},
-		func() (tool.InvokableTool, error) {
-			return kit.New("search_knowledge_nodes", searchDesc, func(ctx context.Context, in searchInput) (searchOutput, error) {
-				nodes, err := store.Search(ctx, in.Kind, in.Query, in.Limit)
-				return searchOutput{Nodes: nodes}, err
-			})
-		},
-	)
+// Edges is the consumer contract used by the native knowledge-edge tools.
+type Edges interface {
+	GetEdge(ctx context.Context, kind string, id uuid.UUID) (domain.KnowledgeEdge, error)
+	ListEdges(ctx context.Context, kind string, sourceID, targetID uuid.UUID, limit int32) ([]domain.KnowledgeEdge, error)
+	UpsertEdge(ctx context.Context, kind string, source, target domain.KnowledgeRef, data, metadata json.RawMessage, expectedRevision *int64) (domain.KnowledgeEdge, error)
+	DeleteEdge(ctx context.Context, kind string, id uuid.UUID, expectedRevision *int64) error
+	EdgeHistory(ctx context.Context, kind string, id uuid.UUID, before int64, limit int) (domain.KnowledgeEdgeHistory, error)
 }
 
-type upsertInput struct {
-	Kind             string         `json:"kind" jsonschema_description:"Predefined node kind: objective, workflow, claim, source or agent."`
-	ID               string         `json:"id,omitempty" jsonschema_description:"Existing node id to update. Omit to create a node."`
-	ExpectedRevision *int64         `json:"expected_revision,omitempty" jsonschema_description:"Required current revision for an optimistic-concurrency update. Must be omitted when creating a node."`
-	Data             map[string]any `json:"data" jsonschema_description:"Node data, including title and description plus fields required by the selected kind."`
+// Schema is the read-only consumer contract used by the native schema tools.
+type Schema interface {
+	GetNodeType(ctx context.Context, kind string) (domain.KnowledgeNodeType, error)
+	ListNodeTypes(ctx context.Context) ([]domain.KnowledgeNodeType, error)
+	GetEdgeType(ctx context.Context, kind string) (domain.KnowledgeEdgeType, error)
+	ListEdgeTypes(ctx context.Context) ([]domain.KnowledgeEdgeType, error)
 }
 
-func upsert(ctx context.Context, store Store, in upsertInput) (domain.KnowledgeNode, error) {
-	var id uuid.UUID
-	var err error
-	if in.ID != "" {
-		id, err = uuid.Parse(in.ID)
-		if err != nil {
-			return domain.KnowledgeNode{}, fmt.Errorf("parse knowledge node id: %w", err)
-		}
-		if id == uuid.Nil {
-			return domain.KnowledgeNode{}, fmt.Errorf("knowledge node id must not be zero")
-		}
-	} else if in.ExpectedRevision != nil {
-		return domain.KnowledgeNode{}, fmt.Errorf("new knowledge node has an expected revision: %w", domain.ErrConflict)
-	}
-	data, err := json.Marshal(in.Data)
+type deleteOutput struct{}
+
+func parseID(raw, name string) (uuid.UUID, error) {
+	id, err := uuid.Parse(raw)
 	if err != nil {
-		return domain.KnowledgeNode{}, fmt.Errorf("encode knowledge node data: %w", err)
+		return uuid.Nil, fmt.Errorf("parse %s: %w", name, err)
 	}
-	return store.Upsert(ctx, in.Kind, id, data, in.ExpectedRevision)
+	if id == uuid.Nil {
+		return uuid.Nil, fmt.Errorf("%s must not be zero", name)
+	}
+	return id, nil
 }
 
-type searchInput struct {
-	Query string `json:"query" jsonschema_description:"Meaning to compare with node titles and descriptions."`
-	Kind  string `json:"kind,omitempty" jsonschema_description:"Optional predefined node kind to restrict results."`
-	Limit int32  `json:"limit,omitempty" jsonschema_description:"Maximum results. Defaults to 10 and is capped at 100."`
+func parseOptionalID(raw, name string) (uuid.UUID, error) {
+	if raw == "" {
+		return uuid.Nil, nil
+	}
+	return parseID(raw, name)
 }
 
-type searchOutput struct {
-	Nodes []domain.KnowledgeNodeMatch `json:"nodes"`
+func rawObject(name string, value map[string]any) (json.RawMessage, error) {
+	if value == nil {
+		return nil, nil
+	}
+	raw, err := json.Marshal(value)
+	if err != nil {
+		return nil, fmt.Errorf("encode %s: %w", name, err)
+	}
+	return raw, nil
+}
+
+func validateHistory(before int64, limit int) error {
+	if before < 0 {
+		return fmt.Errorf("history before must not be negative")
+	}
+	if limit < 0 {
+		return fmt.Errorf("history limit must not be negative")
+	}
+	return nil
 }

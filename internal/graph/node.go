@@ -297,26 +297,13 @@ func currentRaw[T any](node Node[T]) json.RawMessage {
 	return raw
 }
 
-func knowledgeNode[T TextData](node Node[T]) (domain.KnowledgeNode, error) {
-	raw, err := json.Marshal(node.Data)
-	if err != nil {
-		return domain.KnowledgeNode{}, fmt.Errorf("encode graph node: %w", err)
-	}
-	title, description := node.Data.NodeText()
-	return domain.KnowledgeNode{
-		ID: node.ID, Kind: node.Kind, Revision: node.Revision,
-		Title: title, Description: description, Data: raw,
-		CreatedAt: node.CreatedAt, UpdatedAt: node.UpdatedAt,
-	}, nil
-}
-
 // UpsertNode writes raw data through the typed repository registered for kind.
 func (g *Graph) UpsertNode(ctx context.Context, kind string, id uuid.UUID, raw json.RawMessage, opts NodeWriteOptions) (domain.KnowledgeNode, error) {
 	g.mu.RLock()
 	registered, ok := g.nodes[kind]
 	g.mu.RUnlock()
 	if !ok {
-		return domain.KnowledgeNode{}, fmt.Errorf("graph node kind %q: %w", kind, domain.ErrNotFound)
+		return g.upsertDynamicNode(ctx, kind, id, raw, opts)
 	}
 	return registered.upsert(ctx, id, raw, opts)
 }

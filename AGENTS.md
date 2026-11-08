@@ -3,11 +3,11 @@
 Guidance for AI agents and people working in this repo. Read this first, then the documents it links to.
 
 **personal-agent** is a Postgres-backed knowledge and capability service that complements a personal agent. External consumer agents own human-facing LLM interactions; this service owns durable knowledge, deterministic question and evidence tooling, versioned workflow instruction sets and background capabilities suitable for cloud deployment. The current implementation is an orchestration and knowledge-graph MCP server, not a conversational or question-answering product.
-- It serves 26 agent, workflow, run and knowledge-graph tools over unauthenticated, stateless Streamable HTTP and runs explicitly requested workflows in the background.
+- It serves a 15-tool generic consumer graph API at `/mcp` and 19 agent, workflow, run and tool-listing management operations plus schema discovery and administration at `/mcp/admin`. Both use unauthenticated, stateless Streamable HTTP on loopback; the paths separate capabilities, not auth.
 - Workflow agents use Eino over OpenRouter, Postgres and pgvector for storage, and River for jobs.
 - Workflows are instruction sets, not queries run against the knowledge base. External consumer agents may author, test and iterate them using immutable versions; do not propose or implement workflow changes as part of the product boundary.
-- Agent and workflow definitions, and graph-node snapshots, are immutable and stored in the database.
-- `internal/graph` is wired into `internal/app`, which registers versioned objective, workflow, claim, source and agent types and the claim-to-source `supported_by` edge. MCP exposes current node reads, upsert, semantic search and support-relationship add, list and delete; enabled workflow agents expose node upsert and semantic search. Every changed node queues title and description embeddings.
+- Agent and workflow definitions, and graph-node and graph-edge snapshots, are immutable and stored in the database.
+- `internal/graph` is wired into `internal/app`, which registers versioned objective, workflow, claim, source and agent types and the claim-to-source `supported_by` edge. All data tools are generic across these base types and database-defined dynamic types. `/mcp` exposes node and edge reads, writes, deletion, history and schema discovery, plus node semantic search. `/mcp/admin` adds `create_node_type` and `create_edge_type` alongside management operations and read-only schema discovery. Every consumer graph tool has a same-named native equivalent; native schema tools are read-only and there is no native schema mutation. Every changed node queues title and description embeddings.
 - Deterministic question tooling will return structured nodes and evidence rather than conversational answers. Ask a Question is future direction. The existing internal agent loop is retained for enrichment jobs and scheduled tasks only in the target boundary; schedules are future and are not implemented. Cloud deployment and authentication are also not implemented. Memory has been removed; do not document or build on it as existing behaviour.
 
 [docs/architecture.md](docs/architecture.md) describes the system as it is now.
@@ -18,7 +18,7 @@ Guidance for AI agents and people working in this repo. Read this first, then th
 2. **A change is done only when `task check` passes.** It runs generated-code and `go.mod` drift checks, the docs check, lint, vulnerability checks and every test except live ones. Never mark work complete with failures. Never skip or weaken a check to get green.
 3. **Never edit generated code:** `internal/store/db` (sqlc), `**/mocks_test.go` and `internal/mocks` (mockery). Change the source and run `task generate`.
 4. **Never edit a committed migration.** Add a new one with `task migration:new -- name`.
-5. **Agent, workflow and graph-node versions are immutable.** Change agent and workflow definitions by adding a new version; change versioned nodes by appending a snapshot or moving the current pointer with the graph repository.
+5. **Agent, workflow, graph-node and graph-edge versions are immutable.** Change agent and workflow definitions by adding a new version; change versioned nodes and edges by appending a snapshot or, for static typed nodes, moving the current pointer with the graph repository.
 6. **The MCP server deliberately has no auth.** Keep the default listener on loopback, preserve DNS-rebinding and cross-origin protection, and never store secrets in tool output.
 7. **Make modular atomic commits for each completed task, including delegated subagent work. Push only when asked.**
 
@@ -72,7 +72,7 @@ cmd/orchestrator/        MCP server and background-worker entrypoint
 internal/mcpserver/      typed MCP tools and Streamable HTTP transport
 internal/app/            composition root: builds and wires everything
 internal/domain/         shared types and sentinel errors
-internal/graph/          generic typed graph, immutable node history, enrichment and semantic search
+internal/graph/          generic typed and dynamic graph, immutable history, enrichment and node search
 internal/knowledge/      first-class objective, workflow, claim, source and agent types
 internal/<service>/      catalog, chat, runs, agent, embed, ...
 internal/tools/          workflow-agent tool registry; one subpackage per tool set

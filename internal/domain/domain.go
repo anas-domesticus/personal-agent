@@ -101,16 +101,17 @@ type WorkflowMatch struct {
 
 // --- Knowledge graph ----------------------------------------------------------
 
-// KnowledgeNode is one current predefined graph node.
+// KnowledgeNode is the current state of one registered graph node.
 type KnowledgeNode struct {
-	ID          uuid.UUID       `json:"id"`
-	Kind        string          `json:"kind"`
-	Revision    int64           `json:"revision"`
-	Title       string          `json:"title"`
-	Description string          `json:"description"`
-	Data        json.RawMessage `json:"data"`
-	CreatedAt   time.Time       `json:"created_at"`
-	UpdatedAt   time.Time       `json:"updated_at"`
+	ID             uuid.UUID       `json:"id"`
+	Kind           string          `json:"kind"`
+	CurrentVersion int64           `json:"current_version"`
+	Revision       int64           `json:"revision"`
+	Title          string          `json:"title"`
+	Description    string          `json:"description"`
+	Data           json.RawMessage `json:"data"`
+	CreatedAt      time.Time       `json:"created_at"`
+	UpdatedAt      time.Time       `json:"updated_at"`
 }
 
 // KnowledgeNodeMatch is a semantic graph search result.
@@ -119,18 +120,79 @@ type KnowledgeNodeMatch struct {
 	Score float64 `json:"score"`
 }
 
-// KnowledgeEdge is one predefined graph relationship.
+// KnowledgeRef identifies a graph node by ID and kind.
+type KnowledgeRef struct {
+	ID   uuid.UUID `json:"id"`
+	Kind string    `json:"kind"`
+}
+
+// KnowledgeEdge is the current state of one registered graph relationship.
 type KnowledgeEdge struct {
-	ID         uuid.UUID       `json:"id"`
+	ID             uuid.UUID       `json:"id"`
+	Kind           string          `json:"kind"`
+	CurrentVersion int64           `json:"current_version"`
+	SourceID       uuid.UUID       `json:"source_id"`
+	SourceKind     string          `json:"source_kind"`
+	TargetID       uuid.UUID       `json:"target_id"`
+	TargetKind     string          `json:"target_kind"`
+	Data           json.RawMessage `json:"data"`
+	Revision       int64           `json:"revision"`
+	CreatedAt      time.Time       `json:"created_at"`
+	UpdatedAt      time.Time       `json:"updated_at"`
+}
+
+// KnowledgeNodeVersion is one immutable node snapshot.
+type KnowledgeNodeVersion struct {
+	NodeID    uuid.UUID       `json:"node_id"`
+	Version   int64           `json:"version"`
+	Data      json.RawMessage `json:"data"`
+	Metadata  json.RawMessage `json:"metadata"`
+	CreatedAt time.Time       `json:"created_at"`
+}
+
+// KnowledgeNodeHistory is a newest-first page of immutable node snapshots.
+type KnowledgeNodeHistory struct {
+	Versions   []KnowledgeNodeVersion `json:"versions"`
+	NextBefore int64                  `json:"next_before,omitempty"`
+}
+
+// KnowledgeEdgeVersion is one immutable edge snapshot.
+type KnowledgeEdgeVersion struct {
+	EdgeID    uuid.UUID       `json:"edge_id"`
+	Version   int64           `json:"version"`
+	Data      json.RawMessage `json:"data"`
+	Metadata  json.RawMessage `json:"metadata"`
+	CreatedAt time.Time       `json:"created_at"`
+}
+
+// KnowledgeEdgeHistory is a newest-first page of immutable edge snapshots.
+type KnowledgeEdgeHistory struct {
+	Versions   []KnowledgeEdgeVersion `json:"versions"`
+	NextBefore int64                  `json:"next_before,omitempty"`
+}
+
+// KnowledgeEndpoint permits an edge type to connect two node kinds.
+type KnowledgeEndpoint struct {
+	Source string `json:"source"`
+	Target string `json:"target"`
+}
+
+// KnowledgeNodeType describes a persisted node schema.
+type KnowledgeNodeType struct {
 	Kind       string          `json:"kind"`
-	SourceID   uuid.UUID       `json:"source_id"`
-	SourceKind string          `json:"source_kind"`
-	TargetID   uuid.UUID       `json:"target_id"`
-	TargetKind string          `json:"target_kind"`
-	Data       json.RawMessage `json:"data"`
-	Revision   int64           `json:"revision"`
+	Versioned  bool            `json:"versioned"`
+	DataSchema json.RawMessage `json:"data_schema"`
 	CreatedAt  time.Time       `json:"created_at"`
 	UpdatedAt  time.Time       `json:"updated_at"`
+}
+
+// KnowledgeEdgeType describes a persisted edge schema and its endpoints.
+type KnowledgeEdgeType struct {
+	Kind       string              `json:"kind"`
+	DataSchema json.RawMessage     `json:"data_schema"`
+	Endpoints  []KnowledgeEndpoint `json:"endpoints"`
+	CreatedAt  time.Time           `json:"created_at"`
+	UpdatedAt  time.Time           `json:"updated_at"`
 }
 
 // --- Runs ---------------------------------------------------------------------

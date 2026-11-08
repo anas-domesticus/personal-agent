@@ -17,15 +17,23 @@ import (
 const deleteGraphEdge = `-- name: DeleteGraphEdge :execrows
 delete from graph_edges
 where id = $1 and kind = $2
+  and (not $3::bool or revision = $4::bigint)
 `
 
 type DeleteGraphEdgeParams struct {
-	ID   uuid.UUID `json:"id"`
-	Kind string    `json:"kind"`
+	ID               uuid.UUID `json:"id"`
+	Kind             string    `json:"kind"`
+	CheckRevision    bool      `json:"check_revision"`
+	ExpectedRevision int64     `json:"expected_revision"`
 }
 
 func (q *Queries) DeleteGraphEdge(ctx context.Context, arg DeleteGraphEdgeParams) (int64, error) {
-	result, err := q.db.Exec(ctx, deleteGraphEdge, arg.ID, arg.Kind)
+	result, err := q.db.Exec(ctx, deleteGraphEdge,
+		arg.ID,
+		arg.Kind,
+		arg.CheckRevision,
+		arg.ExpectedRevision,
+	)
 	if err != nil {
 		return 0, err
 	}
@@ -35,15 +43,23 @@ func (q *Queries) DeleteGraphEdge(ctx context.Context, arg DeleteGraphEdgeParams
 const deleteGraphNode = `-- name: DeleteGraphNode :execrows
 delete from graph_nodes
 where id = $1 and kind = $2
+  and (not $3::bool or revision = $4::bigint)
 `
 
 type DeleteGraphNodeParams struct {
-	ID   uuid.UUID `json:"id"`
-	Kind string    `json:"kind"`
+	ID               uuid.UUID `json:"id"`
+	Kind             string    `json:"kind"`
+	CheckRevision    bool      `json:"check_revision"`
+	ExpectedRevision int64     `json:"expected_revision"`
 }
 
 func (q *Queries) DeleteGraphNode(ctx context.Context, arg DeleteGraphNodeParams) (int64, error) {
-	result, err := q.db.Exec(ctx, deleteGraphNode, arg.ID, arg.Kind)
+	result, err := q.db.Exec(ctx, deleteGraphNode,
+		arg.ID,
+		arg.Kind,
+		arg.CheckRevision,
+		arg.ExpectedRevision,
+	)
 	if err != nil {
 		return 0, err
 	}
@@ -51,9 +67,11 @@ func (q *Queries) DeleteGraphNode(ctx context.Context, arg DeleteGraphNodeParams
 }
 
 const getGraphEdge = `-- name: GetGraphEdge :one
-select id, kind, source_id, source_kind, target_id, target_kind, data, revision, created_at, updated_at
-from graph_edges
-where id = $1 and kind = $2
+select e.id, e.kind, e.current_version, e.source_id, e.source_kind,
+       e.target_id, e.target_kind, v.data, e.revision, e.created_at, e.updated_at
+from graph_edges e
+join graph_edge_versions v on v.edge_id = e.id and v.version = e.current_version
+where e.id = $1 and e.kind = $2
 `
 
 type GetGraphEdgeParams struct {
@@ -61,12 +79,27 @@ type GetGraphEdgeParams struct {
 	Kind string    `json:"kind"`
 }
 
-func (q *Queries) GetGraphEdge(ctx context.Context, arg GetGraphEdgeParams) (GraphEdge, error) {
+type GetGraphEdgeRow struct {
+	ID             uuid.UUID       `json:"id"`
+	Kind           string          `json:"kind"`
+	CurrentVersion int64           `json:"current_version"`
+	SourceID       uuid.UUID       `json:"source_id"`
+	SourceKind     string          `json:"source_kind"`
+	TargetID       uuid.UUID       `json:"target_id"`
+	TargetKind     string          `json:"target_kind"`
+	Data           json.RawMessage `json:"data"`
+	Revision       int64           `json:"revision"`
+	CreatedAt      time.Time       `json:"created_at"`
+	UpdatedAt      time.Time       `json:"updated_at"`
+}
+
+func (q *Queries) GetGraphEdge(ctx context.Context, arg GetGraphEdgeParams) (GetGraphEdgeRow, error) {
 	row := q.db.QueryRow(ctx, getGraphEdge, arg.ID, arg.Kind)
-	var i GraphEdge
+	var i GetGraphEdgeRow
 	err := row.Scan(
 		&i.ID,
 		&i.Kind,
+		&i.CurrentVersion,
 		&i.SourceID,
 		&i.SourceKind,
 		&i.TargetID,
@@ -80,9 +113,11 @@ func (q *Queries) GetGraphEdge(ctx context.Context, arg GetGraphEdgeParams) (Gra
 }
 
 const getGraphEdgeBetween = `-- name: GetGraphEdgeBetween :one
-select id, kind, source_id, source_kind, target_id, target_kind, data, revision, created_at, updated_at
-from graph_edges
-where kind = $1 and source_id = $2 and target_id = $3
+select e.id, e.kind, e.current_version, e.source_id, e.source_kind,
+       e.target_id, e.target_kind, v.data, e.revision, e.created_at, e.updated_at
+from graph_edges e
+join graph_edge_versions v on v.edge_id = e.id and v.version = e.current_version
+where e.kind = $1 and e.source_id = $2 and e.target_id = $3
 `
 
 type GetGraphEdgeBetweenParams struct {
@@ -91,12 +126,27 @@ type GetGraphEdgeBetweenParams struct {
 	TargetID uuid.UUID `json:"target_id"`
 }
 
-func (q *Queries) GetGraphEdgeBetween(ctx context.Context, arg GetGraphEdgeBetweenParams) (GraphEdge, error) {
+type GetGraphEdgeBetweenRow struct {
+	ID             uuid.UUID       `json:"id"`
+	Kind           string          `json:"kind"`
+	CurrentVersion int64           `json:"current_version"`
+	SourceID       uuid.UUID       `json:"source_id"`
+	SourceKind     string          `json:"source_kind"`
+	TargetID       uuid.UUID       `json:"target_id"`
+	TargetKind     string          `json:"target_kind"`
+	Data           json.RawMessage `json:"data"`
+	Revision       int64           `json:"revision"`
+	CreatedAt      time.Time       `json:"created_at"`
+	UpdatedAt      time.Time       `json:"updated_at"`
+}
+
+func (q *Queries) GetGraphEdgeBetween(ctx context.Context, arg GetGraphEdgeBetweenParams) (GetGraphEdgeBetweenRow, error) {
 	row := q.db.QueryRow(ctx, getGraphEdgeBetween, arg.Kind, arg.SourceID, arg.TargetID)
-	var i GraphEdge
+	var i GetGraphEdgeBetweenRow
 	err := row.Scan(
 		&i.ID,
 		&i.Kind,
+		&i.CurrentVersion,
 		&i.SourceID,
 		&i.SourceKind,
 		&i.TargetID,
@@ -110,7 +160,7 @@ func (q *Queries) GetGraphEdgeBetween(ctx context.Context, arg GetGraphEdgeBetwe
 }
 
 const getGraphEdgeBetweenForUpdate = `-- name: GetGraphEdgeBetweenForUpdate :one
-select id, kind, source_id, source_kind, target_id, target_kind, data, revision, created_at, updated_at
+select id, kind, source_id, source_kind, target_id, target_kind, revision, created_at, updated_at, current_version
 from graph_edges
 where kind = $1 and source_id = $2 and target_id = $3
 for update
@@ -132,29 +182,66 @@ func (q *Queries) GetGraphEdgeBetweenForUpdate(ctx context.Context, arg GetGraph
 		&i.SourceKind,
 		&i.TargetID,
 		&i.TargetKind,
-		&i.Data,
 		&i.Revision,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.CurrentVersion,
+	)
+	return i, err
+}
+
+const getGraphEdgeMaxVersion = `-- name: GetGraphEdgeMaxVersion :one
+select coalesce(max(version), 0)::bigint
+from graph_edge_versions
+where edge_id = $1
+`
+
+func (q *Queries) GetGraphEdgeMaxVersion(ctx context.Context, edgeID uuid.UUID) (int64, error) {
+	row := q.db.QueryRow(ctx, getGraphEdgeMaxVersion, edgeID)
+	var column_1 int64
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
+const getGraphEdgeType = `-- name: GetGraphEdgeType :one
+select kind, data_schema, created_at, updated_at
+from graph_edge_types
+where kind = $1
+`
+
+func (q *Queries) GetGraphEdgeType(ctx context.Context, kind string) (GraphEdgeType, error) {
+	row := q.db.QueryRow(ctx, getGraphEdgeType, kind)
+	var i GraphEdgeType
+	err := row.Scan(
+		&i.Kind,
+		&i.DataSchema,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
 	return i, err
 }
 
-const getGraphEdgeType = `-- name: GetGraphEdgeType :one
-select kind, data_schema
-from graph_edge_types
-where kind = $1
+const getGraphEdgeVersion = `-- name: GetGraphEdgeVersion :one
+select edge_id, version, data, metadata, created_at
+from graph_edge_versions
+where edge_id = $1 and version = $2
 `
 
-type GetGraphEdgeTypeRow struct {
-	Kind       string          `json:"kind"`
-	DataSchema json.RawMessage `json:"data_schema"`
+type GetGraphEdgeVersionParams struct {
+	EdgeID  uuid.UUID `json:"edge_id"`
+	Version int64     `json:"version"`
 }
 
-func (q *Queries) GetGraphEdgeType(ctx context.Context, kind string) (GetGraphEdgeTypeRow, error) {
-	row := q.db.QueryRow(ctx, getGraphEdgeType, kind)
-	var i GetGraphEdgeTypeRow
-	err := row.Scan(&i.Kind, &i.DataSchema)
+func (q *Queries) GetGraphEdgeVersion(ctx context.Context, arg GetGraphEdgeVersionParams) (GraphEdgeVersion, error) {
+	row := q.db.QueryRow(ctx, getGraphEdgeVersion, arg.EdgeID, arg.Version)
+	var i GraphEdgeVersion
+	err := row.Scan(
+		&i.EdgeID,
+		&i.Version,
+		&i.Data,
+		&i.Metadata,
+		&i.CreatedAt,
+	)
 	return i, err
 }
 
@@ -190,7 +277,8 @@ func (q *Queries) GetGraphNode(ctx context.Context, arg GetGraphNodeParams) (Gra
 }
 
 const getGraphNodeCurrent = `-- name: GetGraphNodeCurrent :one
-select n.id, n.kind, n.revision, coalesce(v.data, n.data) as data,
+select n.id, n.kind, coalesce(n.current_version, 0)::bigint as current_version,
+       n.revision, coalesce(v.data, n.data) as data,
        cast(coalesce(v.data, n.data)->>'title' as text) as title,
        cast(coalesce(v.data, n.data)->>'description' as text) as description,
        n.created_at, n.updated_at
@@ -205,14 +293,15 @@ type GetGraphNodeCurrentParams struct {
 }
 
 type GetGraphNodeCurrentRow struct {
-	ID          uuid.UUID       `json:"id"`
-	Kind        string          `json:"kind"`
-	Revision    int64           `json:"revision"`
-	Data        json.RawMessage `json:"data"`
-	Title       string          `json:"title"`
-	Description string          `json:"description"`
-	CreatedAt   time.Time       `json:"created_at"`
-	UpdatedAt   time.Time       `json:"updated_at"`
+	ID             uuid.UUID       `json:"id"`
+	Kind           string          `json:"kind"`
+	CurrentVersion int64           `json:"current_version"`
+	Revision       int64           `json:"revision"`
+	Data           json.RawMessage `json:"data"`
+	Title          string          `json:"title"`
+	Description    string          `json:"description"`
+	CreatedAt      time.Time       `json:"created_at"`
+	UpdatedAt      time.Time       `json:"updated_at"`
 }
 
 func (q *Queries) GetGraphNodeCurrent(ctx context.Context, arg GetGraphNodeCurrentParams) (GetGraphNodeCurrentRow, error) {
@@ -221,6 +310,7 @@ func (q *Queries) GetGraphNodeCurrent(ctx context.Context, arg GetGraphNodeCurre
 	err := row.Scan(
 		&i.ID,
 		&i.Kind,
+		&i.CurrentVersion,
 		&i.Revision,
 		&i.Data,
 		&i.Title,
@@ -312,21 +402,21 @@ func (q *Queries) GetGraphNodeMaxVersion(ctx context.Context, nodeID uuid.UUID) 
 }
 
 const getGraphNodeType = `-- name: GetGraphNodeType :one
-select kind, versioned, data_schema
+select kind, versioned, data_schema, created_at, updated_at
 from graph_node_types
 where kind = $1
 `
 
-type GetGraphNodeTypeRow struct {
-	Kind       string          `json:"kind"`
-	Versioned  bool            `json:"versioned"`
-	DataSchema json.RawMessage `json:"data_schema"`
-}
-
-func (q *Queries) GetGraphNodeType(ctx context.Context, kind string) (GetGraphNodeTypeRow, error) {
+func (q *Queries) GetGraphNodeType(ctx context.Context, kind string) (GraphNodeType, error) {
 	row := q.db.QueryRow(ctx, getGraphNodeType, kind)
-	var i GetGraphNodeTypeRow
-	err := row.Scan(&i.Kind, &i.Versioned, &i.DataSchema)
+	var i GraphNodeType
+	err := row.Scan(
+		&i.Kind,
+		&i.Versioned,
+		&i.DataSchema,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
 	return i, err
 }
 
@@ -355,19 +445,18 @@ func (q *Queries) GetGraphNodeVersion(ctx context.Context, arg GetGraphNodeVersi
 }
 
 const insertGraphEdge = `-- name: InsertGraphEdge :one
-insert into graph_edges (id, kind, source_id, source_kind, target_id, target_kind, data)
-values ($1, $2, $3, $4, $5, $6, $7)
-returning id, kind, source_id, source_kind, target_id, target_kind, data, revision, created_at, updated_at
+insert into graph_edges (id, kind, source_id, source_kind, target_id, target_kind, current_version)
+values ($1, $2, $3, $4, $5, $6, 1)
+returning id, kind, source_id, source_kind, target_id, target_kind, revision, created_at, updated_at, current_version
 `
 
 type InsertGraphEdgeParams struct {
-	ID         uuid.UUID       `json:"id"`
-	Kind       string          `json:"kind"`
-	SourceID   uuid.UUID       `json:"source_id"`
-	SourceKind string          `json:"source_kind"`
-	TargetID   uuid.UUID       `json:"target_id"`
-	TargetKind string          `json:"target_kind"`
-	Data       json.RawMessage `json:"data"`
+	ID         uuid.UUID `json:"id"`
+	Kind       string    `json:"kind"`
+	SourceID   uuid.UUID `json:"source_id"`
+	SourceKind string    `json:"source_kind"`
+	TargetID   uuid.UUID `json:"target_id"`
+	TargetKind string    `json:"target_kind"`
 }
 
 func (q *Queries) InsertGraphEdge(ctx context.Context, arg InsertGraphEdgeParams) (GraphEdge, error) {
@@ -378,7 +467,6 @@ func (q *Queries) InsertGraphEdge(ctx context.Context, arg InsertGraphEdgeParams
 		arg.SourceKind,
 		arg.TargetID,
 		arg.TargetKind,
-		arg.Data,
 	)
 	var i GraphEdge
 	err := row.Scan(
@@ -388,10 +476,10 @@ func (q *Queries) InsertGraphEdge(ctx context.Context, arg InsertGraphEdgeParams
 		&i.SourceKind,
 		&i.TargetID,
 		&i.TargetKind,
-		&i.Data,
 		&i.Revision,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.CurrentVersion,
 	)
 	return i, err
 }
@@ -417,7 +505,7 @@ const insertGraphEdgeType = `-- name: InsertGraphEdgeType :one
 insert into graph_edge_types (kind, data_schema)
 values ($1, $2)
 on conflict (kind) do nothing
-returning kind, data_schema
+returning kind, data_schema, created_at, updated_at
 `
 
 type InsertGraphEdgeTypeParams struct {
@@ -425,15 +513,46 @@ type InsertGraphEdgeTypeParams struct {
 	DataSchema json.RawMessage `json:"data_schema"`
 }
 
-type InsertGraphEdgeTypeRow struct {
-	Kind       string          `json:"kind"`
-	DataSchema json.RawMessage `json:"data_schema"`
+func (q *Queries) InsertGraphEdgeType(ctx context.Context, arg InsertGraphEdgeTypeParams) (GraphEdgeType, error) {
+	row := q.db.QueryRow(ctx, insertGraphEdgeType, arg.Kind, arg.DataSchema)
+	var i GraphEdgeType
+	err := row.Scan(
+		&i.Kind,
+		&i.DataSchema,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
 }
 
-func (q *Queries) InsertGraphEdgeType(ctx context.Context, arg InsertGraphEdgeTypeParams) (InsertGraphEdgeTypeRow, error) {
-	row := q.db.QueryRow(ctx, insertGraphEdgeType, arg.Kind, arg.DataSchema)
-	var i InsertGraphEdgeTypeRow
-	err := row.Scan(&i.Kind, &i.DataSchema)
+const insertGraphEdgeVersion = `-- name: InsertGraphEdgeVersion :one
+insert into graph_edge_versions (edge_id, version, data, metadata)
+values ($1, $2, $3, $4)
+returning edge_id, version, data, metadata, created_at
+`
+
+type InsertGraphEdgeVersionParams struct {
+	EdgeID   uuid.UUID       `json:"edge_id"`
+	Version  int64           `json:"version"`
+	Data     json.RawMessage `json:"data"`
+	Metadata json.RawMessage `json:"metadata"`
+}
+
+func (q *Queries) InsertGraphEdgeVersion(ctx context.Context, arg InsertGraphEdgeVersionParams) (GraphEdgeVersion, error) {
+	row := q.db.QueryRow(ctx, insertGraphEdgeVersion,
+		arg.EdgeID,
+		arg.Version,
+		arg.Data,
+		arg.Metadata,
+	)
+	var i GraphEdgeVersion
+	err := row.Scan(
+		&i.EdgeID,
+		&i.Version,
+		&i.Data,
+		&i.Metadata,
+		&i.CreatedAt,
+	)
 	return i, err
 }
 
@@ -481,7 +600,7 @@ const insertGraphNodeType = `-- name: InsertGraphNodeType :one
 insert into graph_node_types (kind, versioned, data_schema)
 values ($1, $2, $3)
 on conflict (kind) do nothing
-returning kind, versioned, data_schema
+returning kind, versioned, data_schema, created_at, updated_at
 `
 
 type InsertGraphNodeTypeParams struct {
@@ -490,16 +609,16 @@ type InsertGraphNodeTypeParams struct {
 	DataSchema json.RawMessage `json:"data_schema"`
 }
 
-type InsertGraphNodeTypeRow struct {
-	Kind       string          `json:"kind"`
-	Versioned  bool            `json:"versioned"`
-	DataSchema json.RawMessage `json:"data_schema"`
-}
-
-func (q *Queries) InsertGraphNodeType(ctx context.Context, arg InsertGraphNodeTypeParams) (InsertGraphNodeTypeRow, error) {
+func (q *Queries) InsertGraphNodeType(ctx context.Context, arg InsertGraphNodeTypeParams) (GraphNodeType, error) {
 	row := q.db.QueryRow(ctx, insertGraphNodeType, arg.Kind, arg.Versioned, arg.DataSchema)
-	var i InsertGraphNodeTypeRow
-	err := row.Scan(&i.Kind, &i.Versioned, &i.DataSchema)
+	var i GraphNodeType
+	err := row.Scan(
+		&i.Kind,
+		&i.Versioned,
+		&i.DataSchema,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
 	return i, err
 }
 
@@ -561,11 +680,160 @@ func (q *Queries) ListGraphEdgeEndpoints(ctx context.Context, edgeKind string) (
 	return items, nil
 }
 
+const listGraphEdgeTypes = `-- name: ListGraphEdgeTypes :many
+select kind, data_schema, created_at, updated_at
+from graph_edge_types
+order by kind
+`
+
+func (q *Queries) ListGraphEdgeTypes(ctx context.Context) ([]GraphEdgeType, error) {
+	rows, err := q.db.Query(ctx, listGraphEdgeTypes)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []GraphEdgeType{}
+	for rows.Next() {
+		var i GraphEdgeType
+		if err := rows.Scan(
+			&i.Kind,
+			&i.DataSchema,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listGraphEdgeVersions = `-- name: ListGraphEdgeVersions :many
+select edge_id, version, data, metadata, created_at
+from graph_edge_versions
+where edge_id = $1 and ($2::bigint = 0 or version < $2)
+order by version desc
+limit $3
+`
+
+type ListGraphEdgeVersionsParams struct {
+	EdgeID  uuid.UUID `json:"edge_id"`
+	Column2 int64     `json:"column_2"`
+	Limit   int32     `json:"limit"`
+}
+
+func (q *Queries) ListGraphEdgeVersions(ctx context.Context, arg ListGraphEdgeVersionsParams) ([]GraphEdgeVersion, error) {
+	rows, err := q.db.Query(ctx, listGraphEdgeVersions, arg.EdgeID, arg.Column2, arg.Limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []GraphEdgeVersion{}
+	for rows.Next() {
+		var i GraphEdgeVersion
+		if err := rows.Scan(
+			&i.EdgeID,
+			&i.Version,
+			&i.Data,
+			&i.Metadata,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listGraphEdges = `-- name: ListGraphEdges :many
+select e.id, e.kind, e.current_version, e.source_id, e.source_kind,
+       e.target_id, e.target_kind, v.data, e.revision, e.created_at, e.updated_at
+from graph_edges e
+join graph_edge_versions v on v.edge_id = e.id and v.version = e.current_version
+where ($1::bool or e.kind = $2::text)
+  and ($3::bool or e.source_id = $4::uuid)
+  and ($5::bool or e.target_id = $6::uuid)
+order by e.created_at, e.id
+limit $7::int
+`
+
+type ListGraphEdgesParams struct {
+	AllKinds   bool      `json:"all_kinds"`
+	Kind       string    `json:"kind"`
+	AllSources bool      `json:"all_sources"`
+	SourceID   uuid.UUID `json:"source_id"`
+	AllTargets bool      `json:"all_targets"`
+	TargetID   uuid.UUID `json:"target_id"`
+	Lim        int32     `json:"lim"`
+}
+
+type ListGraphEdgesRow struct {
+	ID             uuid.UUID       `json:"id"`
+	Kind           string          `json:"kind"`
+	CurrentVersion int64           `json:"current_version"`
+	SourceID       uuid.UUID       `json:"source_id"`
+	SourceKind     string          `json:"source_kind"`
+	TargetID       uuid.UUID       `json:"target_id"`
+	TargetKind     string          `json:"target_kind"`
+	Data           json.RawMessage `json:"data"`
+	Revision       int64           `json:"revision"`
+	CreatedAt      time.Time       `json:"created_at"`
+	UpdatedAt      time.Time       `json:"updated_at"`
+}
+
+func (q *Queries) ListGraphEdges(ctx context.Context, arg ListGraphEdgesParams) ([]ListGraphEdgesRow, error) {
+	rows, err := q.db.Query(ctx, listGraphEdges,
+		arg.AllKinds,
+		arg.Kind,
+		arg.AllSources,
+		arg.SourceID,
+		arg.AllTargets,
+		arg.TargetID,
+		arg.Lim,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListGraphEdgesRow{}
+	for rows.Next() {
+		var i ListGraphEdgesRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Kind,
+			&i.CurrentVersion,
+			&i.SourceID,
+			&i.SourceKind,
+			&i.TargetID,
+			&i.TargetKind,
+			&i.Data,
+			&i.Revision,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listGraphEdgesFrom = `-- name: ListGraphEdgesFrom :many
-select id, kind, source_id, source_kind, target_id, target_kind, data, revision, created_at, updated_at
-from graph_edges
-where kind = $1 and source_id = $2
-order by created_at, id
+select e.id, e.kind, e.current_version, e.source_id, e.source_kind,
+       e.target_id, e.target_kind, v.data, e.revision, e.created_at, e.updated_at
+from graph_edges e
+join graph_edge_versions v on v.edge_id = e.id and v.version = e.current_version
+where e.kind = $1 and e.source_id = $2
+order by e.created_at, e.id
 `
 
 type ListGraphEdgesFromParams struct {
@@ -573,18 +841,33 @@ type ListGraphEdgesFromParams struct {
 	SourceID uuid.UUID `json:"source_id"`
 }
 
-func (q *Queries) ListGraphEdgesFrom(ctx context.Context, arg ListGraphEdgesFromParams) ([]GraphEdge, error) {
+type ListGraphEdgesFromRow struct {
+	ID             uuid.UUID       `json:"id"`
+	Kind           string          `json:"kind"`
+	CurrentVersion int64           `json:"current_version"`
+	SourceID       uuid.UUID       `json:"source_id"`
+	SourceKind     string          `json:"source_kind"`
+	TargetID       uuid.UUID       `json:"target_id"`
+	TargetKind     string          `json:"target_kind"`
+	Data           json.RawMessage `json:"data"`
+	Revision       int64           `json:"revision"`
+	CreatedAt      time.Time       `json:"created_at"`
+	UpdatedAt      time.Time       `json:"updated_at"`
+}
+
+func (q *Queries) ListGraphEdgesFrom(ctx context.Context, arg ListGraphEdgesFromParams) ([]ListGraphEdgesFromRow, error) {
 	rows, err := q.db.Query(ctx, listGraphEdgesFrom, arg.Kind, arg.SourceID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	items := []GraphEdge{}
+	items := []ListGraphEdgesFromRow{}
 	for rows.Next() {
-		var i GraphEdge
+		var i ListGraphEdgesFromRow
 		if err := rows.Scan(
 			&i.ID,
 			&i.Kind,
+			&i.CurrentVersion,
 			&i.SourceID,
 			&i.SourceKind,
 			&i.TargetID,
@@ -605,10 +888,12 @@ func (q *Queries) ListGraphEdgesFrom(ctx context.Context, arg ListGraphEdgesFrom
 }
 
 const listGraphEdgesTo = `-- name: ListGraphEdgesTo :many
-select id, kind, source_id, source_kind, target_id, target_kind, data, revision, created_at, updated_at
-from graph_edges
-where kind = $1 and target_id = $2
-order by created_at, id
+select e.id, e.kind, e.current_version, e.source_id, e.source_kind,
+       e.target_id, e.target_kind, v.data, e.revision, e.created_at, e.updated_at
+from graph_edges e
+join graph_edge_versions v on v.edge_id = e.id and v.version = e.current_version
+where e.kind = $1 and e.target_id = $2
+order by e.created_at, e.id
 `
 
 type ListGraphEdgesToParams struct {
@@ -616,24 +901,71 @@ type ListGraphEdgesToParams struct {
 	TargetID uuid.UUID `json:"target_id"`
 }
 
-func (q *Queries) ListGraphEdgesTo(ctx context.Context, arg ListGraphEdgesToParams) ([]GraphEdge, error) {
+type ListGraphEdgesToRow struct {
+	ID             uuid.UUID       `json:"id"`
+	Kind           string          `json:"kind"`
+	CurrentVersion int64           `json:"current_version"`
+	SourceID       uuid.UUID       `json:"source_id"`
+	SourceKind     string          `json:"source_kind"`
+	TargetID       uuid.UUID       `json:"target_id"`
+	TargetKind     string          `json:"target_kind"`
+	Data           json.RawMessage `json:"data"`
+	Revision       int64           `json:"revision"`
+	CreatedAt      time.Time       `json:"created_at"`
+	UpdatedAt      time.Time       `json:"updated_at"`
+}
+
+func (q *Queries) ListGraphEdgesTo(ctx context.Context, arg ListGraphEdgesToParams) ([]ListGraphEdgesToRow, error) {
 	rows, err := q.db.Query(ctx, listGraphEdgesTo, arg.Kind, arg.TargetID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	items := []GraphEdge{}
+	items := []ListGraphEdgesToRow{}
 	for rows.Next() {
-		var i GraphEdge
+		var i ListGraphEdgesToRow
 		if err := rows.Scan(
 			&i.ID,
 			&i.Kind,
+			&i.CurrentVersion,
 			&i.SourceID,
 			&i.SourceKind,
 			&i.TargetID,
 			&i.TargetKind,
 			&i.Data,
 			&i.Revision,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listGraphNodeTypes = `-- name: ListGraphNodeTypes :many
+select kind, versioned, data_schema, created_at, updated_at
+from graph_node_types
+order by kind
+`
+
+func (q *Queries) ListGraphNodeTypes(ctx context.Context) ([]GraphNodeType, error) {
+	rows, err := q.db.Query(ctx, listGraphNodeTypes)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []GraphNodeType{}
+	for rows.Next() {
+		var i GraphNodeType
+		if err := rows.Scan(
+			&i.Kind,
+			&i.Versioned,
+			&i.DataSchema,
 			&i.CreatedAt,
 			&i.UpdatedAt,
 		); err != nil {
@@ -688,7 +1020,8 @@ func (q *Queries) ListGraphNodeVersions(ctx context.Context, arg ListGraphNodeVe
 }
 
 const listGraphNodes = `-- name: ListGraphNodes :many
-select n.id, n.kind, n.revision, coalesce(v.data, n.data) as data,
+select n.id, n.kind, coalesce(n.current_version, 0)::bigint as current_version,
+       n.revision, coalesce(v.data, n.data) as data,
        cast(coalesce(v.data, n.data)->>'title' as text) as title,
        cast(coalesce(v.data, n.data)->>'description' as text) as description,
        n.created_at, n.updated_at
@@ -706,14 +1039,15 @@ type ListGraphNodesParams struct {
 }
 
 type ListGraphNodesRow struct {
-	ID          uuid.UUID       `json:"id"`
-	Kind        string          `json:"kind"`
-	Revision    int64           `json:"revision"`
-	Data        json.RawMessage `json:"data"`
-	Title       string          `json:"title"`
-	Description string          `json:"description"`
-	CreatedAt   time.Time       `json:"created_at"`
-	UpdatedAt   time.Time       `json:"updated_at"`
+	ID             uuid.UUID       `json:"id"`
+	Kind           string          `json:"kind"`
+	CurrentVersion int64           `json:"current_version"`
+	Revision       int64           `json:"revision"`
+	Data           json.RawMessage `json:"data"`
+	Title          string          `json:"title"`
+	Description    string          `json:"description"`
+	CreatedAt      time.Time       `json:"created_at"`
+	UpdatedAt      time.Time       `json:"updated_at"`
 }
 
 func (q *Queries) ListGraphNodes(ctx context.Context, arg ListGraphNodesParams) ([]ListGraphNodesRow, error) {
@@ -728,6 +1062,7 @@ func (q *Queries) ListGraphNodes(ctx context.Context, arg ListGraphNodesParams) 
 		if err := rows.Scan(
 			&i.ID,
 			&i.Kind,
+			&i.CurrentVersion,
 			&i.Revision,
 			&i.Data,
 			&i.Title,
@@ -785,10 +1120,20 @@ func (q *Queries) ListGraphNodesMissingEmbeddings(ctx context.Context, arg ListG
 	return items, nil
 }
 
+const lockGraphEdgeTuple = `-- name: LockGraphEdgeTuple :exec
+select pg_advisory_xact_lock(hashtextextended($1::text, 0))
+`
+
+func (q *Queries) LockGraphEdgeTuple(ctx context.Context, lockKey string) error {
+	_, err := q.db.Exec(ctx, lockGraphEdgeTuple, lockKey)
+	return err
+}
+
 const searchGraphNodes = `-- name: SearchGraphNodes :many
-select id, kind, revision, data, title, description, created_at, updated_at, score
+select id, kind, current_version, revision, data, title, description, created_at, updated_at, score
 from (
-    select n.id, n.kind, n.revision, coalesce(v.data, n.data) as data,
+    select n.id, n.kind, coalesce(n.current_version, 0)::bigint as current_version,
+           n.revision, coalesce(v.data, n.data) as data,
            cast(coalesce(v.data, n.data)->>'title' as text) as title,
            cast(coalesce(v.data, n.data)->>'description' as text) as description,
            n.created_at, n.updated_at,
@@ -816,15 +1161,16 @@ type SearchGraphNodesParams struct {
 }
 
 type SearchGraphNodesRow struct {
-	ID          uuid.UUID       `json:"id"`
-	Kind        string          `json:"kind"`
-	Revision    int64           `json:"revision"`
-	Data        json.RawMessage `json:"data"`
-	Title       string          `json:"title"`
-	Description string          `json:"description"`
-	CreatedAt   time.Time       `json:"created_at"`
-	UpdatedAt   time.Time       `json:"updated_at"`
-	Score       float64         `json:"score"`
+	ID             uuid.UUID       `json:"id"`
+	Kind           string          `json:"kind"`
+	CurrentVersion int64           `json:"current_version"`
+	Revision       int64           `json:"revision"`
+	Data           json.RawMessage `json:"data"`
+	Title          string          `json:"title"`
+	Description    string          `json:"description"`
+	CreatedAt      time.Time       `json:"created_at"`
+	UpdatedAt      time.Time       `json:"updated_at"`
+	Score          float64         `json:"score"`
 }
 
 func (q *Queries) SearchGraphNodes(ctx context.Context, arg SearchGraphNodesParams) ([]SearchGraphNodesRow, error) {
@@ -845,6 +1191,7 @@ func (q *Queries) SearchGraphNodes(ctx context.Context, arg SearchGraphNodesPara
 		if err := rows.Scan(
 			&i.ID,
 			&i.Kind,
+			&i.CurrentVersion,
 			&i.Revision,
 			&i.Data,
 			&i.Title,
@@ -861,6 +1208,36 @@ func (q *Queries) SearchGraphNodes(ctx context.Context, arg SearchGraphNodesPara
 		return nil, err
 	}
 	return items, nil
+}
+
+const setGraphEdgeVersion = `-- name: SetGraphEdgeVersion :one
+update graph_edges
+set current_version = $2, revision = revision + 1, updated_at = now()
+where id = $1
+returning id, kind, source_id, source_kind, target_id, target_kind, revision, created_at, updated_at, current_version
+`
+
+type SetGraphEdgeVersionParams struct {
+	ID             uuid.UUID `json:"id"`
+	CurrentVersion int64     `json:"current_version"`
+}
+
+func (q *Queries) SetGraphEdgeVersion(ctx context.Context, arg SetGraphEdgeVersionParams) (GraphEdge, error) {
+	row := q.db.QueryRow(ctx, setGraphEdgeVersion, arg.ID, arg.CurrentVersion)
+	var i GraphEdge
+	err := row.Scan(
+		&i.ID,
+		&i.Kind,
+		&i.SourceID,
+		&i.SourceKind,
+		&i.TargetID,
+		&i.TargetKind,
+		&i.Revision,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.CurrentVersion,
+	)
+	return i, err
 }
 
 const setGraphNodeEmbeddings = `-- name: SetGraphNodeEmbeddings :execrows
@@ -928,43 +1305,6 @@ func (q *Queries) SetGraphNodeVersion(ctx context.Context, arg SetGraphNodeVersi
 		&i.DescriptionEmbedding,
 		&i.EmbeddingModel,
 		&i.EmbeddingRevision,
-	)
-	return i, err
-}
-
-const updateGraphEdgeData = `-- name: UpdateGraphEdgeData :one
-update graph_edges
-set data = $4, revision = revision + 1, updated_at = now()
-where id = $1 and kind = $2 and source_id = $3
-returning id, kind, source_id, source_kind, target_id, target_kind, data, revision, created_at, updated_at
-`
-
-type UpdateGraphEdgeDataParams struct {
-	ID       uuid.UUID       `json:"id"`
-	Kind     string          `json:"kind"`
-	SourceID uuid.UUID       `json:"source_id"`
-	Data     json.RawMessage `json:"data"`
-}
-
-func (q *Queries) UpdateGraphEdgeData(ctx context.Context, arg UpdateGraphEdgeDataParams) (GraphEdge, error) {
-	row := q.db.QueryRow(ctx, updateGraphEdgeData,
-		arg.ID,
-		arg.Kind,
-		arg.SourceID,
-		arg.Data,
-	)
-	var i GraphEdge
-	err := row.Scan(
-		&i.ID,
-		&i.Kind,
-		&i.SourceID,
-		&i.SourceKind,
-		&i.TargetID,
-		&i.TargetKind,
-		&i.Data,
-		&i.Revision,
-		&i.CreatedAt,
-		&i.UpdatedAt,
 	)
 	return i, err
 }

@@ -103,7 +103,13 @@ func (w *Worker) node(ctx context.Context, args EnrichmentArgs) error {
 	registered, ok := w.Graph.nodes[args.Type]
 	w.Graph.mu.RUnlock()
 	if !ok {
-		return river.JobCancel(fmt.Errorf("unknown graph node kind %q", args.Type))
+		if _, err := w.Graph.store.GetGraphNodeType(ctx, args.Type); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return river.JobCancel(fmt.Errorf("unknown graph node kind %q", args.Type))
+			}
+			return fmt.Errorf("load graph node kind for enrichment: %w", err)
+		}
+		return nil
 	}
 	if registered.enrich == nil {
 		return nil
@@ -144,7 +150,13 @@ func (w *Worker) edge(ctx context.Context, args EnrichmentArgs) error {
 	registered, ok := w.Graph.edges[args.Type]
 	w.Graph.mu.RUnlock()
 	if !ok {
-		return river.JobCancel(fmt.Errorf("unknown graph edge kind %q", args.Type))
+		if _, err := w.Graph.store.GetGraphEdgeType(ctx, args.Type); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return river.JobCancel(fmt.Errorf("unknown graph edge kind %q", args.Type))
+			}
+			return fmt.Errorf("load graph edge kind for enrichment: %w", err)
+		}
+		return nil
 	}
 	if registered.enrich == nil {
 		return nil

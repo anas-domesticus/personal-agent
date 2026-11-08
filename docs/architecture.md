@@ -10,7 +10,7 @@ The current implementation reads, stores and semantically searches structured kn
 
 ## Current implementation
 
-All statements below describe current code. The graph database schema and `internal/graph` Go module are wired into `internal/app`, which registers versioned objective, workflow, claim, source and agent types, one claim-to-source `supported_by` relationship, and runs the graph-enrichment worker. MCP exposes current node reads, node upsert and semantic search plus support-relationship add, list and delete.
+All statements below describe current code. The graph database schema and `internal/graph` Go module are wired into `internal/app`, which registers versioned objective, workflow, claim, source and agent types and one claim-to-source `supported_by` relationship. All data tools are generic across both those base types and database-defined dynamic types. `/mcp` exposes the consumer graph API; `/mcp/admin` exposes agent, workflow and run management plus graph schema discovery and administration.
 
 ## Technology
 
@@ -32,10 +32,11 @@ workflows ──< workflow_versions    (DAG as JSONB; immutable)
 graph_node_types ──< graph_nodes ──< graph_node_versions (immutable snapshots)
                              │                  (current_version, revision on graph_nodes)
 graph_edge_types ──< graph_edge_type_endpoints
-                  └──< graph_edges (typed, unversioned relationships; revision)
+                  └──< graph_edges ──< graph_edge_versions (immutable snapshots)
+                                      (current_version, revision on graph_edges)
 ```
 
-- **Versioning.** A change to an agent or workflow is a new version row. `current_version` on the parent points at the one in use. A trigger rejects updates to agent, workflow and graph-node version tables. Runs and messages point at exact agent versions.
+- **Versioning.** A change to an agent or workflow is a new version row. `current_version` on the parent points at the one in use. A trigger rejects updates to agent, workflow, graph-node and graph-edge version tables. Runs and messages point at exact agent versions.
 - **Workflow graphs** are JSONB: `{"nodes": [{"id", "agent", "instruction"?}], "edges": [{"from", "to"}]}`. Nodes refer to agents by name and run the agent's current version when the node starts. `internal/workflow` rejects cycles, duplicate or reserved ids and dangling edges; the catalog checks every agent exists.
 - **Structured data between nodes.** A node's input is `{"input": <workflow input>, "<upstream id>": <its output>, ...}`. Its output matches the agent version's `output_schema`, or is `{"text": "..."}` when there is none. The workflow output contains each sink node's output keyed by id. A node gets one correction attempt for invalid output.
 - **Deletion.** A workflow without runs can be deleted, which cascades to its versions. Postgres rejects deletion when runs reference it, and the catalog returns `ErrConflict` so execution history remains intact.
@@ -43,21 +44,23 @@ graph_edge_types ──< graph_edge_type_endpoints
 
 ## Knowledge graph
 
-`internal/graph` is a reusable typed graph module wired into `internal/app`. The application registers five versioned knowledge types from `internal/knowledge`: objectives describe desired outcomes, workflows describe DAG-shaped instruction sets, claims hold statements of knowledge, sources hold provenance, and agents describe prompt/model/tool definitions. Workflow and agent knowledge nodes are descriptive records independent of the runnable definitions in the catalogues. Upserting either kind with `upsert_knowledge_node` only writes a graph record and queues its enrichment and embeddings; it does not create or update a runnable catalogue definition or make that record executable. Every node data type embeds common details or otherwise implements `graph.TextData`, exposing matching `title` and `description` JSON fields. The graph-enrichment worker runs with the application. MCP exposes generic current reads, upsert and semantic search across these predefined kinds. The only base relationship kind is `supported_by`, whose sole permitted endpoint is claim to source and whose payload is an empty JSON object. Repeated upserts of the same claim/source pair return the existing edge without incrementing its revision. Support listing requires exactly one claim or source selector and preserves repository creation order; deletion selects an edge ID. Ask a Question is not implemented.
+`internal/graph` is a reusable typed graph module wired into `internal/app`. The application registers five versioned knowledge types from `internal/knowledge`: objectives describe desired outcomes, workflows describe DAG-shaped instruction sets, claims hold statements of knowledge, sources hold provenance, and agents describe prompt/model/tool definitions. Workflow and agent knowledge nodes are descriptive records independent of the runnable definitions in the catalogues. Upserting either kind with `upsert_node` only writes a graph record and queues its enrichment and embeddings; it does not create or update a runnable catalogue definition or make that record executable. Every node data type embeds common details or otherwise implements `graph.TextData`, exposing matching `title` and `description` JSON fields. The graph-enrichment worker runs with the application.
 
-`graph.New` requires a store and a non-nil `JobInserter` for writes: a changed write or rollback fails rather than committing without its enrichment job. Generic registration functions return node and edge repositories for application-defined Go types. Registration persists a JSON Schema in `graph_node_types` or `graph_edge_types`, verifies that a later process registering the same kind matches the stored definition, and rejects a repeated kind in the same registry even when it matches. Node versioned-ness is fixed at registration and persisted with the type; a later registration cannot change it. Edge registration also verifies the complete endpoint set. `RegisterRiver` freezes registration and installs the shared worker and its `graph_enrichment` queue.
+All consumer and native data tooling is generic across persisted node and edge types. The only base relationship kind is `supported_by`, whose sole permitted endpoint is claim to source and whose payload is an empty JSON object. Administrators can add dynamic node and edge types at `/mcp/admin`, supplying JSON Schemas and, for edges, their complete permitted endpoint pairs. Dynamic nodes and all edges retain immutable version history. Generic edge upserts are idempotent: repeating an unchanged kind/source/target upsert returns the existing edge without incrementing its revision. `list_edges` optionally filters by kind and by at most one source or target UUID. Ask a Question is not implemented.
 
-Changing a registered Go type does not migrate its persisted definition or data. A schema change requires an explicit migration that updates the affected `data_schema` and transforms both `graph_nodes.data` and `graph_node_versions.data`, including historical snapshots. Never edit a committed migration. Registrations have no type-level version number and no automatic migration mechanism, so breaking changes should use a new kind unless a deliberate migration covers every snapshot.
+`graph.New` requires a store and a non-nil `JobInserter` for writes: a changed write or rollback fails rather than committing without its enrichment job. Generic registration functions return node and edge repositories for application-defined Go types. Static registration persists a JSON Schema in `graph_node_types` or `graph_edge_types`, verifies that a later process registering the same kind matches the stored definition, and rejects a repeated kind in the same registry even when it matches. Static node versioned-ness is fixed at registration and persisted with the type; a later registration cannot change it. Edge registration also verifies the complete endpoint set. `RegisterRiver` freezes static registration and installs the shared worker and its `graph_enrichment` queue. Dynamic type creation remains available after that freeze: it persists new definitions without registering Go enrichment handlers. There is no schema-definition history or schema mutation API.
 
-Ordinary nodes store current JSON directly on `graph_nodes`; they are not versioned. Versioned nodes keep JSON in immutable `graph_node_versions` rows and point `current_version` at the current snapshot. Their composed repositories add current-version reads, individual historical reads, newest-first pagination and rollback. Raw graph reads return current ordinary or versioned JSON as `domain.KnowledgeNode`: `GetNode` selects by kind and UUID, while `ListNodes` optionally filters by kind and orders by `created_at` then `id`. List limits default to 10 and are capped at 100. Unknown kinds and missing nodes return `domain.ErrNotFound`. Rollback to a different version moves the pointer without creating a version and increments the separate optimistic-concurrency revision; rolling back to the current version is unchanged.
+Changing a registered Go type does not migrate its persisted definition or data. A schema change requires an explicit migration that updates the affected `data_schema` and transforms both current data and every immutable node or edge snapshot. Never edit a committed migration. There is no automatic schema-evolution mechanism, and incompatible schema evolution remains unsupported; use a new kind or a deliberate migration covering every snapshot.
 
-History pages default to 50 versions and are capped at 100. `Before` is an exclusive version cursor; pass the returned `NextBefore` to fetch the next older page. A zero `NextBefore` means no older versions remain.
+Ordinary static nodes store current JSON directly on `graph_nodes`; they are not versioned. Versioned static nodes and every dynamic node keep JSON in immutable `graph_node_versions` rows and point `current_version` at the current snapshot. Their composed repositories add current-version reads, individual historical reads, newest-first pagination and rollback. Raw graph reads return current ordinary or versioned JSON as `domain.KnowledgeNode`: `GetNode` selects by kind and UUID, while `ListNodes` optionally filters by kind and orders by `created_at` then `id`. Node and edge list limits default to 10 and are capped at 100. Unknown kinds and missing entities return `domain.ErrNotFound`. Static repository rollback to a different version moves the pointer without creating a version and increments the separate optimistic-concurrency revision; rolling back to the current version is unchanged.
+
+Node and edge history pages default to 50 versions and are capped at 100. `Before` is an exclusive version cursor; pass the returned `NextBefore` to fetch the next older page. A zero `NextBefore` means no older versions remain. Node and edge versions may carry optional JSON metadata.
 
 Node upserts, edge upserts and rollbacks accept optional `ExpectedRevision` optimistic-concurrency checks. A nil pointer skips the check and is required when creating an entity. A mismatch returns `domain.ErrConflict`.
 
 Repository lookups map missing rows to `domain.ErrNotFound`. Persistence helpers map Postgres unique violations (`23505`) to `domain.ErrExists`, and foreign-key or check violations (`23503`, `23514`) to `domain.ErrConflict`. Revision mismatches and disallowed edge endpoint combinations also return `ErrConflict`.
 
-Edges carry source and target kinds. Composite foreign keys check those kinds against the actual nodes and against `graph_edge_type_endpoints`, so Postgres enforces both endpoint existence and permitted relationship types. One edge of a kind may connect a pair of nodes; different kinds may connect the same pair. Self-loops and deletion of connected nodes are rejected.
+Edges carry source and target kinds. Composite foreign keys check those kinds against the actual nodes and against `graph_edge_type_endpoints`, so Postgres enforces both endpoint existence and permitted relationship types. One edge of a kind may connect a pair of nodes; different kinds may connect the same pair. Self-loops and generic deletion of connected nodes are rejected. Every edge stores immutable JSON snapshots in `graph_edge_versions`, with a `current_version` pointer and a separate revision on `graph_edges`. There is no edge semantic search.
 
 Every changed node or edge upsert and every rollback to a different version queues a `graph_enrich` River job on the `graph_enrichment` queue in the same transaction, including types with no registered handlers. A changed node also queues an `embed` job on the `embeddings` queue; this is implicit and independent of the per-type handlers. Unchanged upserts and no-op rollbacks do not create versions, increment revisions or queue jobs. The enrichment worker dispatches to handlers supplied during registration and skips stale revisions. Handlers are external functions and must be idempotent because River jobs run at least once.
 
@@ -66,8 +69,9 @@ Every changed node or edge upsert and every rollback to a different version queu
 ## Process and package map
 
 ```text
-MCP client ══ Streamable HTTP ══> mcpserver ──> catalog, runs (consumer interfaces)
-                                        app ──> River workers ──> agent builder
+MCP consumer ══ Streamable HTTP ══> /mcp ────────> generic graph and schema reads
+MCP admin    ══ Streamable HTTP ══> /mcp/admin ──> catalog, runs and schema administration
+                                           app ──> River workers ──> agent builder
 ```
 
 | Package | Responsibility |
@@ -80,7 +84,7 @@ MCP client ══ Streamable HTTP ══> mcpserver ──> catalog, runs (consu
 | `internal/store` | Postgres pool, migrations, transaction helper and River migrations |
 | `internal/store/db` | sqlc-generated queries, never hand-edited |
 | `internal/catalog` | Agents and workflows: validation, versioning, deletion and search |
-| `internal/graph` | Typed graph registry, current raw node reads, node and edge persistence, immutable history, rollback, enrichment and semantic search |
+| `internal/graph` | Typed and dynamic graph registry, raw node and edge reads, persistence, immutable history, rollback, enrichment and node semantic search |
 | `internal/knowledge` | First-class objective, workflow, claim, source and agent types, the supported-by relationship and validation |
 | `internal/agent` | Builds runnable Eino agents from versions and provides subagents |
 | `internal/chat` | Conversation and message storage used by subagents |
@@ -93,7 +97,7 @@ MCP client ══ Streamable HTTP ══> mcpserver ──> catalog, runs (consu
 | `internal/tools/kit` | Tool construction, result limits and configuration helpers |
 | `internal/tools/clock` | Current-time tool |
 | `internal/tools/files` | File and shell tools through `workspace.Workspace` |
-| `internal/tools/knowledge` | Native upsert and semantic-search tools for predefined knowledge nodes |
+| `internal/tools/knowledge` | Native generic graph data and read-only schema-discovery tools |
 | `internal/tools/web` | Web search and fetch |
 | `internal/tools/mcp` | Outbound MCP clients and tool discovery |
 | `internal/workspace` | Local or remote-sandbox workspace boundary |
@@ -103,17 +107,19 @@ MCP client ══ Streamable HTTP ══> mcpserver ──> catalog, runs (consu
 
 ## MCP API
 
-`internal/mcpserver` registers 26 tools with typed input and output schemas. The SDK validates arguments, returns `structuredContent` plus JSON text compatibility content, and turns handler errors into tool execution errors. Read-only, additive and idempotent operations carry annotations; every tool is marked closed-world. MCP workflow-search, knowledge-list, knowledge-search and run-list limits default to 10 and are capped at 100; these are separate from the graph history defaults of 50 and 100 described above.
+`internal/mcpserver` exposes two servers with typed input and output schemas. `/mcp` registers 15 consumer graph tools. `/mcp/admin` registers the existing 19 agent, workflow, run and `list_tools` management operations, four read-only schema-discovery operations, and two schema-creation operations. The SDK validates arguments, returns `structuredContent` plus JSON text compatibility content, and turns handler errors into tool execution errors. Read-only, additive and idempotent operations carry annotations; every tool is marked closed-world. Admin workflow-search and run-list limits, and consumer node/edge list and search limits, default to 10 and are capped at 100; graph history defaults to 50 and is capped at 100.
 
-- **Agents:** `list_agents`, `get_agent`, `list_agent_versions` (immutable versions, newest first), `create_agent`, `add_agent_version`, `set_agent_version`, and `list_tools` (tools and settings available to workflow-agent definitions).
-- **Workflows:** `list_workflows`, `search_workflows`, `get_workflow`, `list_workflow_versions`, `create_workflow`, `add_workflow_version`, `set_workflow_version`, `update_workflow_description`, `delete_workflow`.
-- **Runs:** `run_workflow`, `get_run`, `list_runs`.
-- **Knowledge nodes:** `get_knowledge_node`, `list_knowledge_nodes`, `upsert_knowledge_node`, `search_knowledge_nodes`. Get accepts a predefined kind and UUID and returns current raw data. List returns current nodes in `created_at`/`id` order, optionally restricted to one kind. Upsert accepts a predefined kind and raw data object, with an optional existing id and expected revision. Semantic search optionally restricts one kind and ranks current nodes by their closer title or description vector.
-- **Knowledge relationships:** `add_supported_by`, `delete_supported_by`, `list_supported_by`. Add parses claim and source UUIDs and idempotently connects that pair. List parses exactly one optional `claim_id` or `source_id` selector and returns complete edges, including raw JSON data, in repository creation order. Delete parses `edge_id` and returns an empty structured object.
+- **Agents (`/mcp/admin`):** `list_agents`, `get_agent`, `list_agent_versions` (immutable versions, newest first), `create_agent`, `add_agent_version`, `set_agent_version`, and `list_tools` (tools and settings available to workflow-agent definitions).
+- **Workflows (`/mcp/admin`):** `list_workflows`, `search_workflows`, `get_workflow`, `list_workflow_versions`, `create_workflow`, `add_workflow_version`, `set_workflow_version`, `update_workflow_description`, `delete_workflow`.
+- **Runs (`/mcp/admin`):** `run_workflow`, `get_run`, `list_runs`.
+- **Nodes (`/mcp`):** `get_node`, `list_nodes`, `upsert_node`, `delete_node`, `search_nodes`, `get_node_history`. Get accepts any persisted kind and UUID and returns current raw data. List returns current nodes in `created_at`/`id` order, optionally restricted to one kind. Upsert accepts a kind, raw data object, optional metadata, optional existing ID and expected revision. Delete removes a node only when no edge references it. Semantic search optionally restricts one kind and ranks current nodes by their closer title or description vector. History returns immutable versions newest first.
+- **Edges (`/mcp`):** `get_edge`, `list_edges`, `upsert_edge`, `delete_edge`, `get_edge_history`. Upsert identifies endpoints with nested source and target node references and accepts raw data, optional metadata and expected revision. List optionally filters by kind and at most one endpoint UUID. Edge reads and history include current versions and immutable snapshots.
+- **Schema discovery (`/mcp` and `/mcp/admin`):** `get_node_type`, `list_node_types`, `get_edge_type`, `list_edge_types`. These operations are read-only and return persisted JSON Schemas and edge endpoints.
+- **Schema administration (`/mcp/admin` only):** `create_node_type`, `create_edge_type`. These add dynamic versioned node types and dynamic edge types with JSON Schemas and permitted endpoints. There is no schema-definition history or mutation operation.
 
 `get_workflow` optionally selects a version instead of the current one. `run_workflow` starts the current version asynchronously and returns a run id; `wait_seconds` optionally polls for up to five minutes. `get_run` omits transcripts by default and can include them for debugging. Workflow deletion never removes recorded runs.
 
-The transport is stateless and returns JSON responses. Durable state lives in Postgres, not MCP sessions. The official SDK supplies localhost DNS-rebinding protection and request-size limits; Go's cross-origin protection wraps the handler. There is deliberately no authentication. `MCP_LISTEN` defaults to `127.0.0.1:7433` and configuration rejects non-loopback addresses. The endpoint is `/mcp`. Do not expose this server to an untrusted network.
+Both transports are stateless and return JSON responses. Durable state lives in Postgres, not MCP sessions. The official SDK supplies localhost DNS-rebinding protection and request-size limits; Go's cross-origin protection wraps each handler. There is deliberately no authentication on either endpoint. `/mcp` versus `/mcp/admin` separates capability exposure, not users or authorisation. `MCP_LISTEN` defaults to `127.0.0.1:7433` and configuration rejects non-loopback addresses. Do not expose either server to an untrusted network.
 
 ## Composition and ownership
 
@@ -126,7 +132,7 @@ The transport is stateless and returns JSON responses. Durable state lives in Po
 
 An agent version holds its system prompt, OpenRouter model, settings, tools and optional output JSON Schema. Models, embeddings and search all use `OPENROUTER_API_KEY`; without it the MCP management API still works, but model runs and embeddings wait unavailable and semantic knowledge-node search returns `ErrUnavailable`.
 
-An agent version's `config.tools` enables native tools, settings objects and tools from configured outbound MCP servers. `list_tools` describes the available tools and their settings. Native `upsert_knowledge_node` and `search_knowledge_nodes` tools let enabled agents write and search the predefined knowledge schema through `app.Knowledge`, using the same UUID parsing, new-node expected-revision validation and semantic-search behaviour as the MCP operations. Native search limits default to 10 and are capped at 100. Tool failures are returned to the model as `kit.Result` values. Tools that disappear or are temporarily unavailable are skipped when an agent builds rather than making its stored version unreadable.
+An agent version's `config.tools` enables native tools, settings objects and tools from configured outbound MCP servers. `list_tools` describes the available tools and their settings. Every consumer graph tool has a native equivalent with the same name: all 15 node, edge and schema-discovery operations use `app.Knowledge`, including UUID parsing and revision validation. Native schema tools are read-only; there is no native schema mutation. Tool failures are returned to the model as `kit.Result` values. Tools that disappear or are temporarily unavailable are skipped when an agent builds rather than making its stored version unreadable.
 
 The workspace controls all file and command operations. Local commands receive a small environment rather than server secrets, run in their own process group and are killed on timeout. They still have the server's operating-system permissions, so use a container for isolation. `WORKSPACE=sandbox` selects the remote-sandbox boundary, whose operations currently return unimplemented.
 

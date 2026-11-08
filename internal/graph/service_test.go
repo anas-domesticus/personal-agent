@@ -2,6 +2,7 @@ package graph_test
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/google/uuid"
@@ -37,6 +38,44 @@ func TestUpsertNodeUsesTypedRegistration(t *testing.T) {
 	require.ErrorContains(t, err, "unknown field")
 	_, err = g.UpsertNode(context.Background(), "unknown", created.ID, []byte(`{}`), graph.NodeWriteOptions{})
 	require.ErrorIs(t, err, domain.ErrNotFound)
+}
+
+func TestUpsertEdgeUsesTypedRegistration(t *testing.T) {
+	t.Parallel()
+	_, g, _ := newGraph(t)
+	ctx := context.Background()
+	people, err := graph.RegisterNode(ctx, g, graph.NodeSpec[person]{Kind: "person"})
+	require.NoError(t, err)
+	_, err = graph.RegisterEdge(ctx, g, graph.EdgeSpec[relationship]{
+		Kind: "knows", Endpoints: []graph.Endpoint{{Source: "person", Target: "person"}},
+		Validate: func(value relationship) error {
+			if value.Since <= 0 {
+				return errors.New("since must be positive")
+			}
+			return nil
+		},
+	})
+	require.NoError(t, err)
+	ada, err := people.Upsert(ctx, uuid.Nil, person{Name: "Ada"}, graph.NodeWriteOptions{})
+	require.NoError(t, err)
+	grace, err := people.Upsert(ctx, uuid.Nil, person{Name: "Grace"}, graph.NodeWriteOptions{})
+	require.NoError(t, err)
+
+	// This payload satisfies the reflected schema but violates EdgeSpec.Validate.
+	_, err = g.UpsertEdge(ctx, "knows", ada.Ref, grace.Ref, []byte(`{"since":0}`), graph.EdgeWriteOptions{})
+	require.ErrorContains(t, err, "since must be positive")
+	edges, err := g.ListEdges(ctx, "knows", uuid.Nil, uuid.Nil, 10)
+	require.NoError(t, err)
+	assert.Empty(t, edges)
+
+	created, err := g.UpsertEdge(ctx, "knows", ada.Ref, grace.Ref, []byte(`{"since":1840}`), graph.EdgeWriteOptions{
+		Metadata: []byte(`{"source":"generic"}`),
+	})
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), created.CurrentVersion)
+	assert.JSONEq(t, `{"since":1840}`, string(created.Data))
+	_, err = g.UpsertEdge(ctx, "knows", ada.Ref, grace.Ref, []byte(`{"since":1841,"unknown":true}`), graph.EdgeWriteOptions{})
+	require.ErrorContains(t, err, "unknown field")
 }
 
 func TestSearchNodesUsesCurrentEmbeddings(t *testing.T) {

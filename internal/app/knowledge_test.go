@@ -149,23 +149,23 @@ func TestSupportedByRelationships(t *testing.T) {
 	t.Cleanup(func() { a.Close(context.Background()) })
 	ctx := context.Background()
 
-	claim, err := a.Knowledge.Claims.Upsert(ctx, uuid.Nil, knowledge.Claim{
-		Details: knowledge.Details{Title: "The graph stores support", Description: "A test claim"},
-	}, graph.NodeWriteOptions{})
+	claimData := json.RawMessage(`{"title":"The graph stores support","description":"A test claim"}`)
+	claim, err := a.Knowledge.UpsertNode(ctx, knowledge.ClaimKind, uuid.Nil, claimData, nil, nil)
 	require.NoError(t, err)
-	otherClaim, err := a.Knowledge.Claims.Upsert(ctx, uuid.Nil, knowledge.Claim{
-		Details: knowledge.Details{Title: "Another claim", Description: "Another test claim"},
-	}, graph.NodeWriteOptions{})
+	otherClaim, err := a.Knowledge.UpsertNode(ctx, knowledge.ClaimKind, uuid.Nil,
+		json.RawMessage(`{"title":"Another claim","description":"Another test claim"}`), nil, nil)
 	require.NoError(t, err)
-	sources := make([]graph.Node[knowledge.Source], 2)
+	sources := make([]domain.KnowledgeNode, 2)
 	for i := range sources {
-		sources[i], err = a.Knowledge.Sources.Upsert(ctx, uuid.Nil, knowledge.Source{
-			Details: knowledge.Details{Title: "Source", Description: "Supporting material"},
-		}, graph.NodeWriteOptions{})
+		sources[i], err = a.Knowledge.UpsertNode(ctx, knowledge.SourceKind, uuid.Nil,
+			json.RawMessage(`{"title":"Source","description":"Supporting material"}`), nil, nil)
 		require.NoError(t, err)
 	}
 
-	first, err := a.Knowledge.AddSupportedBy(ctx, claim.ID, sources[0].ID)
+	ref := func(node domain.KnowledgeNode) domain.KnowledgeRef {
+		return domain.KnowledgeRef{ID: node.ID, Kind: node.Kind}
+	}
+	first, err := a.Knowledge.UpsertEdge(ctx, knowledge.SupportedByKind, ref(claim), ref(sources[0]), json.RawMessage(`{}`), nil, nil)
 	require.NoError(t, err)
 	assert.Equal(t, knowledge.SupportedByKind, first.Kind)
 	assert.Equal(t, claim.ID, first.SourceID)
@@ -173,36 +173,56 @@ func TestSupportedByRelationships(t *testing.T) {
 	assert.Equal(t, sources[0].ID, first.TargetID)
 	assert.Equal(t, knowledge.SourceKind, first.TargetKind)
 	assert.JSONEq(t, `{}`, string(first.Data))
+	assert.Equal(t, int64(1), first.CurrentVersion)
 	assert.Equal(t, int64(1), first.Revision)
 
+	got, err := a.Knowledge.GetNode(ctx, claim.Kind, claim.ID)
+	require.NoError(t, err)
+	assert.Equal(t, claim, got)
+	gotEdge, err := a.Knowledge.GetEdge(ctx, first.Kind, first.ID)
+	require.NoError(t, err)
+	assert.Equal(t, first, gotEdge)
+
 	// Repeated and invalid selectors share the relationship scenario's state.
-	duplicate, err := a.Knowledge.AddSupportedBy(ctx, claim.ID, sources[0].ID)
+	duplicate, err := a.Knowledge.UpsertEdge(ctx, knowledge.SupportedByKind, ref(claim), ref(sources[0]), json.RawMessage(`{}`), nil, nil)
 	require.NoError(t, err)
 	assert.Equal(t, first, duplicate)
-	second, err := a.Knowledge.AddSupportedBy(ctx, claim.ID, sources[1].ID)
+	second, err := a.Knowledge.UpsertEdge(ctx, knowledge.SupportedByKind, ref(claim), ref(sources[1]), json.RawMessage(`{}`), nil, nil)
 	require.NoError(t, err)
-	third, err := a.Knowledge.AddSupportedBy(ctx, otherClaim.ID, sources[1].ID)
+	third, err := a.Knowledge.UpsertEdge(ctx, knowledge.SupportedByKind, ref(otherClaim), ref(sources[1]), json.RawMessage(`{}`), nil, nil)
 	require.NoError(t, err)
 
-	fromClaim, err := a.Knowledge.ListSupportedBy(ctx, claim.ID, uuid.Nil)
+	fromClaim, err := a.Knowledge.ListEdges(ctx, knowledge.SupportedByKind, claim.ID, uuid.Nil, 0)
 	require.NoError(t, err)
 	assert.Equal(t, []domain.KnowledgeEdge{first, second}, fromClaim)
-	toSource, err := a.Knowledge.ListSupportedBy(ctx, uuid.Nil, sources[1].ID)
+	toSource, err := a.Knowledge.ListEdges(ctx, knowledge.SupportedByKind, uuid.Nil, sources[1].ID, 0)
 	require.NoError(t, err)
 	assert.Equal(t, []domain.KnowledgeEdge{second, third}, toSource)
+	allSupport, err := a.Knowledge.ListEdges(ctx, knowledge.SupportedByKind, uuid.Nil, uuid.Nil, 0)
+	require.NoError(t, err)
+	assert.Equal(t, []domain.KnowledgeEdge{first, second, third}, allSupport)
 
-	_, err = a.Knowledge.ListSupportedBy(ctx, uuid.Nil, uuid.Nil)
-	require.ErrorContains(t, err, "exactly one")
-	_, err = a.Knowledge.ListSupportedBy(ctx, claim.ID, sources[0].ID)
-	require.ErrorContains(t, err, "exactly one")
-	_, err = a.Knowledge.AddSupportedBy(ctx, sources[0].ID, claim.ID)
+	claims, err := a.Knowledge.ListNodes(ctx, knowledge.ClaimKind, 0)
+	require.NoError(t, err)
+	assert.Equal(t, []domain.KnowledgeNode{claim, otherClaim}, claims)
+	history, err := a.Knowledge.NodeHistory(ctx, claim.Kind, claim.ID, 0, 0)
+	require.NoError(t, err)
+	require.Len(t, history.Versions, 1)
+	assert.JSONEq(t, string(claimData), string(history.Versions[0].Data))
+	edgeHistory, err := a.Knowledge.EdgeHistory(ctx, first.Kind, first.ID, 0, 0)
+	require.NoError(t, err)
+	require.Len(t, edgeHistory.Versions, 1)
+	assert.Equal(t, int64(1), edgeHistory.Versions[0].Version)
+
+	_, err = a.Knowledge.UpsertEdge(ctx, knowledge.SupportedByKind, ref(sources[0]), ref(claim), json.RawMessage(`{}`), nil, nil)
 	require.ErrorIs(t, err, domain.ErrConflict)
+	require.ErrorIs(t, a.Knowledge.DeleteNode(ctx, claim.Kind, claim.ID, nil), domain.ErrConflict)
 
-	require.NoError(t, a.Knowledge.DeleteSupportedBy(ctx, first.ID))
-	fromClaim, err = a.Knowledge.ListSupportedBy(ctx, claim.ID, uuid.Nil)
+	require.NoError(t, a.Knowledge.DeleteEdge(ctx, first.Kind, first.ID, nil))
+	fromClaim, err = a.Knowledge.ListEdges(ctx, knowledge.SupportedByKind, claim.ID, uuid.Nil, 0)
 	require.NoError(t, err)
 	assert.Equal(t, []domain.KnowledgeEdge{second}, fromClaim)
-	assert.ErrorIs(t, a.Knowledge.DeleteSupportedBy(ctx, first.ID), domain.ErrNotFound)
+	assert.ErrorIs(t, a.Knowledge.DeleteEdge(ctx, first.Kind, first.ID, nil), domain.ErrNotFound)
 }
 
 func TestConcurrentSupportedByCreation(t *testing.T) {
@@ -213,14 +233,14 @@ func TestConcurrentSupportedByCreation(t *testing.T) {
 	t.Cleanup(func() { a.Close(context.Background()) })
 	ctx := context.Background()
 
-	claim, err := a.Knowledge.Claims.Upsert(ctx, uuid.Nil, knowledge.Claim{
-		Details: knowledge.Details{Title: "Concurrent support", Description: "A test claim"},
-	}, graph.NodeWriteOptions{})
+	claim, err := a.Knowledge.UpsertNode(ctx, knowledge.ClaimKind, uuid.Nil,
+		json.RawMessage(`{"title":"Concurrent support","description":"A test claim"}`), nil, nil)
 	require.NoError(t, err)
-	source, err := a.Knowledge.Sources.Upsert(ctx, uuid.Nil, knowledge.Source{
-		Details: knowledge.Details{Title: "Source", Description: "Supporting material"},
-	}, graph.NodeWriteOptions{})
+	source, err := a.Knowledge.UpsertNode(ctx, knowledge.SourceKind, uuid.Nil,
+		json.RawMessage(`{"title":"Source","description":"Supporting material"}`), nil, nil)
 	require.NoError(t, err)
+	claimRef := domain.KnowledgeRef{ID: claim.ID, Kind: claim.Kind}
+	sourceRef := domain.KnowledgeRef{ID: source.ID, Kind: source.Kind}
 
 	const callers = 8
 	type result struct {
@@ -235,7 +255,7 @@ func TestConcurrentSupportedByCreation(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			<-start
-			results[i].edge, results[i].err = a.Knowledge.AddSupportedBy(ctx, claim.ID, source.ID)
+			results[i].edge, results[i].err = a.Knowledge.UpsertEdge(ctx, knowledge.SupportedByKind, claimRef, sourceRef, json.RawMessage(`{}`), nil, nil)
 		}()
 	}
 	close(start)
@@ -245,6 +265,122 @@ func TestConcurrentSupportedByCreation(t *testing.T) {
 		require.NoError(t, result.err)
 		assert.Equal(t, results[0].edge, result.edge)
 	}
+}
+
+func TestDynamicTypeAdministration(t *testing.T) {
+	t.Parallel()
+	st, _ := testdb.Open(t)
+	a, err := app.New(context.Background(), config.Config{MCP: config.MCP{}, WorkspaceDir: t.TempDir()}, app.Options{Store: st})
+	require.NoError(t, err)
+	t.Cleanup(func() { a.Close(context.Background()) })
+	ctx := context.Background()
+
+	nodeSchema := json.RawMessage(`{"type":"object","properties":{"title":{"type":"string"},"description":{"type":"string"},"body":{"type":"string"}},"required":["title","description","body"],"additionalProperties":false}`)
+	nodeType, err := a.Knowledge.CreateNodeType(ctx, "fact", nodeSchema)
+	require.NoError(t, err)
+	assert.Equal(t, "fact", nodeType.Kind)
+	assert.True(t, nodeType.Versioned)
+	assert.JSONEq(t, string(nodeSchema), string(nodeType.DataSchema))
+	gotNodeType, err := a.Knowledge.GetNodeType(ctx, nodeType.Kind)
+	require.NoError(t, err)
+	assert.Equal(t, nodeType, gotNodeType)
+	nodeTypes, err := a.Knowledge.ListNodeTypes(ctx)
+	require.NoError(t, err)
+	assert.Contains(t, nodeTypes, nodeType)
+
+	edgeSchema := json.RawMessage(`{"type":"object","properties":{"note":{"type":"string"}},"required":["note"],"additionalProperties":false}`)
+	endpoints := []domain.KnowledgeEndpoint{{Source: "fact", Target: "fact"}}
+	edgeType, err := a.Knowledge.CreateEdgeType(ctx, "references", edgeSchema, endpoints)
+	require.NoError(t, err)
+	assert.Equal(t, "references", edgeType.Kind)
+	assert.JSONEq(t, string(edgeSchema), string(edgeType.DataSchema))
+	assert.Equal(t, endpoints, edgeType.Endpoints)
+	gotEdgeType, err := a.Knowledge.GetEdgeType(ctx, edgeType.Kind)
+	require.NoError(t, err)
+	assert.Equal(t, edgeType, gotEdgeType)
+	edgeTypes, err := a.Knowledge.ListEdgeTypes(ctx)
+	require.NoError(t, err)
+	assert.Contains(t, edgeTypes, edgeType)
+
+	firstData := json.RawMessage(`{"title":"First fact","description":"Initial dynamic node","body":"one"}`)
+	firstMetadata := json.RawMessage(`{"origin":"initial"}`)
+	first, err := a.Knowledge.UpsertNode(ctx, nodeType.Kind, uuid.Nil, firstData, firstMetadata, nil)
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), first.CurrentVersion)
+	assert.Equal(t, int64(1), first.Revision)
+	second, err := a.Knowledge.UpsertNode(ctx, nodeType.Kind, uuid.Nil,
+		json.RawMessage(`{"title":"Second fact","description":"Another dynamic node","body":"two"}`), nil, nil)
+	require.NoError(t, err)
+
+	firstRevision := first.Revision
+	changedData := json.RawMessage(`{"title":"First fact","description":"Updated dynamic node","body":"changed"}`)
+	changedMetadata := json.RawMessage(`{"origin":"update"}`)
+	first, err = a.Knowledge.UpsertNode(ctx, nodeType.Kind, first.ID, changedData, changedMetadata, &firstRevision)
+	require.NoError(t, err)
+	assert.Equal(t, int64(2), first.CurrentVersion)
+	assert.Equal(t, int64(2), first.Revision)
+	gotNode, err := a.Knowledge.GetNode(ctx, first.Kind, first.ID)
+	require.NoError(t, err)
+	assert.Equal(t, first, gotNode)
+	nodes, err := a.Knowledge.ListNodes(ctx, nodeType.Kind, 0)
+	require.NoError(t, err)
+	assert.Equal(t, []domain.KnowledgeNode{first, second}, nodes)
+	nodeHistory, err := a.Knowledge.NodeHistory(ctx, first.Kind, first.ID, 0, 0)
+	require.NoError(t, err)
+	require.Len(t, nodeHistory.Versions, 2)
+	assert.Equal(t, int64(2), nodeHistory.Versions[0].Version)
+	assert.JSONEq(t, string(changedData), string(nodeHistory.Versions[0].Data))
+	assert.JSONEq(t, string(changedMetadata), string(nodeHistory.Versions[0].Metadata))
+	assert.Equal(t, int64(1), nodeHistory.Versions[1].Version)
+	assert.JSONEq(t, string(firstData), string(nodeHistory.Versions[1].Data))
+	assert.JSONEq(t, string(firstMetadata), string(nodeHistory.Versions[1].Metadata))
+
+	firstRef := domain.KnowledgeRef{ID: first.ID, Kind: first.Kind}
+	secondRef := domain.KnowledgeRef{ID: second.ID, Kind: second.Kind}
+	edgeData := json.RawMessage(`{"note":"initial"}`)
+	edgeMetadata := json.RawMessage(`{"origin":"initial"}`)
+	edge, err := a.Knowledge.UpsertEdge(ctx, edgeType.Kind, firstRef, secondRef, edgeData, edgeMetadata, nil)
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), edge.CurrentVersion)
+	assert.Equal(t, int64(1), edge.Revision)
+	edgeRevision := edge.Revision
+	changedEdgeData := json.RawMessage(`{"note":"changed"}`)
+	changedEdgeMetadata := json.RawMessage(`{"origin":"update"}`)
+	edge, err = a.Knowledge.UpsertEdge(ctx, edgeType.Kind, firstRef, secondRef, changedEdgeData, changedEdgeMetadata, &edgeRevision)
+	require.NoError(t, err)
+	assert.Equal(t, int64(2), edge.CurrentVersion)
+	assert.Equal(t, int64(2), edge.Revision)
+	gotEdge, err := a.Knowledge.GetEdge(ctx, edge.Kind, edge.ID)
+	require.NoError(t, err)
+	assert.Equal(t, edge, gotEdge)
+
+	fromFirst, err := a.Knowledge.ListEdges(ctx, edgeType.Kind, first.ID, uuid.Nil, 0)
+	require.NoError(t, err)
+	assert.Equal(t, []domain.KnowledgeEdge{edge}, fromFirst)
+	toSecond, err := a.Knowledge.ListEdges(ctx, edgeType.Kind, uuid.Nil, second.ID, 0)
+	require.NoError(t, err)
+	assert.Equal(t, []domain.KnowledgeEdge{edge}, toSecond)
+	allReferences, err := a.Knowledge.ListEdges(ctx, edgeType.Kind, uuid.Nil, uuid.Nil, 0)
+	require.NoError(t, err)
+	assert.Equal(t, []domain.KnowledgeEdge{edge}, allReferences)
+	edgeHistory, err := a.Knowledge.EdgeHistory(ctx, edge.Kind, edge.ID, 0, 0)
+	require.NoError(t, err)
+	require.Len(t, edgeHistory.Versions, 2)
+	assert.Equal(t, int64(2), edgeHistory.Versions[0].Version)
+	assert.JSONEq(t, string(changedEdgeData), string(edgeHistory.Versions[0].Data))
+	assert.JSONEq(t, string(changedEdgeMetadata), string(edgeHistory.Versions[0].Metadata))
+	assert.Equal(t, int64(1), edgeHistory.Versions[1].Version)
+	assert.JSONEq(t, string(edgeData), string(edgeHistory.Versions[1].Data))
+	assert.JSONEq(t, string(edgeMetadata), string(edgeHistory.Versions[1].Metadata))
+
+	require.ErrorIs(t, a.Knowledge.DeleteNode(ctx, first.Kind, first.ID, nil), domain.ErrConflict)
+	require.ErrorIs(t, a.Knowledge.DeleteNode(ctx, second.Kind, second.ID, nil), domain.ErrConflict)
+	edgeRevision = edge.Revision
+	require.NoError(t, a.Knowledge.DeleteEdge(ctx, edge.Kind, edge.ID, &edgeRevision))
+	_, err = a.Knowledge.GetEdge(ctx, edge.Kind, edge.ID)
+	require.ErrorIs(t, err, domain.ErrNotFound)
+	require.NoError(t, a.Knowledge.DeleteNode(ctx, first.Kind, first.ID, nil))
+	require.NoError(t, a.Knowledge.DeleteNode(ctx, second.Kind, second.ID, nil))
 }
 
 func TestKnowledgeMigrationPreservesExistingNodes(t *testing.T) {
@@ -259,7 +395,7 @@ func TestKnowledgeMigrationPreservesExistingNodes(t *testing.T) {
 	t.Cleanup(func() { require.NoError(t, database.Close()) })
 	provider, err := goose.NewProvider(goose.DialectPostgres, database, os.DirFS("../store/migrations"))
 	require.NoError(t, err)
-	_, err = provider.Down(context.Background())
+	_, err = provider.DownTo(context.Background(), 7)
 	require.NoError(t, err)
 
 	tests := []struct {

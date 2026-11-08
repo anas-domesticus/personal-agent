@@ -54,6 +54,7 @@ type registeredNode struct {
 type registeredEdge struct {
 	definition EdgeType
 	enrich     func(context.Context, Edge[json.RawMessage]) error
+	upsert     func(context.Context, Ref, Ref, json.RawMessage, EdgeWriteOptions) (domain.KnowledgeEdge, error)
 }
 
 // New constructs an empty graph registry. Registration persists definitions

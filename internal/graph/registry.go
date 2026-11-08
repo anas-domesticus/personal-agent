@@ -106,7 +106,7 @@ func registerNode[T TextData](ctx context.Context, g *Graph, spec NodeSpec[T], v
 		if err != nil {
 			return domain.KnowledgeNode{}, err
 		}
-		return knowledgeNode(node)
+		return g.GetNode(ctx, spec.Kind, node.ID)
 	}
 	g.nodes[spec.Kind] = registered
 	return repository, nil
@@ -266,6 +266,7 @@ func RegisterEdge[T any](ctx context.Context, g *Graph, spec EdgeSpec[T]) (*Edge
 		}
 		return nil
 	}
+	repository := &EdgeRepository[T]{graph: g, kind: spec.Kind, permitted: permitted, validate: validate}
 	registered := registeredEdge{definition: definition}
 	if len(spec.Enrichers) > 0 {
 		registered.enrich = func(ctx context.Context, edge Edge[json.RawMessage]) error {
@@ -294,14 +295,28 @@ func RegisterEdge[T any](ctx context.Context, g *Graph, spec EdgeSpec[T]) (*Edge
 	if _, exists := g.edges[spec.Kind]; exists {
 		return nil, fmt.Errorf("edge kind %q is already registered", spec.Kind)
 	}
+	registered.upsert = func(ctx context.Context, source, target Ref, raw json.RawMessage, opts EdgeWriteOptions) (domain.KnowledgeEdge, error) {
+		data, err := decodeStrict[T](raw)
+		if err != nil {
+			return domain.KnowledgeEdge{}, err
+		}
+		versioned, err := repository.UpsertVersion(ctx, source, target, data, opts)
+		if err != nil {
+			return domain.KnowledgeEdge{}, err
+		}
+		return g.GetEdge(ctx, spec.Kind, versioned.ID)
+	}
 	g.edges[spec.Kind] = registered
-	return &EdgeRepository[T]{graph: g, kind: spec.Kind, permitted: permitted, validate: validate}, nil
+	return repository, nil
 }
 
 func compileSchema(kind string, raw json.RawMessage) (*schemavalidator.Schema, error) {
 	var document any
 	if err := json.Unmarshal(raw, &document); err != nil {
 		return nil, fmt.Errorf("decode graph schema: %w", err)
+	}
+	if object, ok := document.(map[string]any); !ok || object == nil {
+		return nil, errors.New("graph schema must be a JSON object")
 	}
 	compiler := schemavalidator.NewCompiler()
 	if err := compiler.AddResource(kind+".json", document); err != nil {

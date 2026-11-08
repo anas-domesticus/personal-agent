@@ -15,7 +15,9 @@ import (
 	"github.com/anas-domesticus/personal-agent/internal/workflow"
 )
 
-const instructions = `Postgres-backed orchestration for agentic tasks. Manage immutable agent and workflow versions, start background workflow runs and inspect their durable results. Workflow graphs contain agent nodes and directed edges; every referenced agent must exist. Starting a run returns its current detail, including a run id for polling with get_run; an optional wait may return the final result immediately. Add and update predefined knowledge nodes with upsert_knowledge_node, read them with get_knowledge_node or list_knowledge_nodes, and find them by meaning with search_knowledge_nodes. Connect claims to supporting sources with add_supported_by, inspect those relationships with list_supported_by, and remove them with delete_supported_by.`
+const consumerInstructions = `Access the knowledge graph. Read, write, delete and semantically search nodes; read, write and delete edges; inspect immutable node and edge history; and discover registered node and edge schemas.`
+
+const adminInstructions = `Postgres-backed orchestration for agentic tasks. Manage immutable agent and workflow versions, start background workflow runs and inspect their durable results. Workflow graphs contain agent nodes and directed edges; every referenced agent must exist. Starting a run returns its current detail, including a run id for polling with get_run; an optional wait may return the final result immediately. Discover knowledge graph schemas and create dynamic node and edge types.`
 
 type Agents interface {
 	List(ctx context.Context) ([]domain.Agent, error)
@@ -45,40 +47,84 @@ type Runs interface {
 	List(ctx context.Context, workflow string, limit int32) ([]domain.Run, error)
 }
 
-// Knowledge is implemented by *app.Knowledge.
-type Knowledge interface {
-	Get(ctx context.Context, kind string, id uuid.UUID) (domain.KnowledgeNode, error)
-	List(ctx context.Context, kind string, limit int32) ([]domain.KnowledgeNode, error)
-	Upsert(ctx context.Context, kind string, id uuid.UUID, data json.RawMessage, expectedRevision *int64) (domain.KnowledgeNode, error)
-	Search(ctx context.Context, kind, query string, limit int32) ([]domain.KnowledgeNodeMatch, error)
-	AddSupportedBy(ctx context.Context, claimID, sourceID uuid.UUID) (domain.KnowledgeEdge, error)
-	DeleteSupportedBy(ctx context.Context, edgeID uuid.UUID) error
-	ListSupportedBy(ctx context.Context, claimID, sourceID uuid.UUID) ([]domain.KnowledgeEdge, error)
+// Nodes provides generic knowledge-node operations.
+type Nodes interface {
+	GetNode(ctx context.Context, kind string, id uuid.UUID) (domain.KnowledgeNode, error)
+	ListNodes(ctx context.Context, kind string, limit int32) ([]domain.KnowledgeNode, error)
+	UpsertNode(ctx context.Context, kind string, id uuid.UUID, data, metadata json.RawMessage, expectedRevision *int64) (domain.KnowledgeNode, error)
+	DeleteNode(ctx context.Context, kind string, id uuid.UUID, expectedRevision *int64) error
+	SearchNodes(ctx context.Context, kind, query string, limit int32) ([]domain.KnowledgeNodeMatch, error)
+	NodeHistory(ctx context.Context, kind string, id uuid.UUID, before int64, limit int) (domain.KnowledgeNodeHistory, error)
+}
+
+// Edges provides generic knowledge-edge operations.
+type Edges interface {
+	GetEdge(ctx context.Context, kind string, id uuid.UUID) (domain.KnowledgeEdge, error)
+	ListEdges(ctx context.Context, kind string, sourceID, targetID uuid.UUID, limit int32) ([]domain.KnowledgeEdge, error)
+	UpsertEdge(ctx context.Context, kind string, source, target domain.KnowledgeRef, data, metadata json.RawMessage, expectedRevision *int64) (domain.KnowledgeEdge, error)
+	DeleteEdge(ctx context.Context, kind string, id uuid.UUID, expectedRevision *int64) error
+	EdgeHistory(ctx context.Context, kind string, id uuid.UUID, before int64, limit int) (domain.KnowledgeEdgeHistory, error)
+}
+
+// Schema provides read-only knowledge-graph type discovery.
+type Schema interface {
+	GetNodeType(ctx context.Context, kind string) (domain.KnowledgeNodeType, error)
+	ListNodeTypes(ctx context.Context) ([]domain.KnowledgeNodeType, error)
+	GetEdgeType(ctx context.Context, kind string) (domain.KnowledgeEdgeType, error)
+	ListEdgeTypes(ctx context.Context) ([]domain.KnowledgeEdgeType, error)
+}
+
+// SchemaAdmin creates dynamic knowledge-graph types.
+type SchemaAdmin interface {
+	CreateNodeType(ctx context.Context, kind string, dataSchema json.RawMessage) (domain.KnowledgeNodeType, error)
+	CreateEdgeType(ctx context.Context, kind string, dataSchema json.RawMessage, endpoints []domain.KnowledgeEndpoint) (domain.KnowledgeEdgeType, error)
 }
 
 type Tools interface {
 	Assignable() []kit.Info
 }
 
-type Deps struct {
-	Agents    Agents
-	Workflows Workflows
-	Runs      Runs
-	Knowledge Knowledge
-	Tools     Tools
+type ConsumerDeps struct {
+	Nodes  Nodes
+	Edges  Edges
+	Schema Schema
 }
 
-func New(d Deps) (*mcp.Server, http.Handler) {
-	s := mcp.NewServer(&mcp.Implementation{Name: "personal-agent", Version: "1.0.0"}, &mcp.ServerOptions{Instructions: instructions})
+type AdminDeps struct {
+	Agents      Agents
+	Workflows   Workflows
+	Runs        Runs
+	Tools       Tools
+	Schema      Schema
+	SchemaAdmin SchemaAdmin
+}
+
+// NewConsumer exposes only data-plane graph tools and schema discovery.
+func NewConsumer(d ConsumerDeps) (*mcp.Server, http.Handler) {
+	s := mcp.NewServer(&mcp.Implementation{Name: "personal-agent-consumer", Version: "1.0.0"}, &mcp.ServerOptions{Instructions: consumerInstructions})
+	registerNodeTools(s, d.Nodes)
+	registerEdgeTools(s, d.Edges)
+	registerSchemaTools(s, d.Schema)
+	return s, handler(s)
+}
+
+// NewAdmin exposes orchestration tools, schema discovery and schema creation.
+func NewAdmin(d AdminDeps) (*mcp.Server, http.Handler) {
+	s := mcp.NewServer(&mcp.Implementation{Name: "personal-agent-admin", Version: "1.0.0"}, &mcp.ServerOptions{Instructions: adminInstructions})
 	registerAgentTools(s, d.Agents, d.Tools)
 	registerWorkflowTools(s, d.Workflows)
 	registerRunTools(s, d.Runs)
-	registerKnowledgeTools(s, d.Knowledge)
+	registerSchemaTools(s, d.Schema)
+	registerSchemaAdminTools(s, d.SchemaAdmin)
+	return s, handler(s)
+}
+
+func handler(s *mcp.Server) http.Handler {
 	h := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return s }, &mcp.StreamableHTTPOptions{
 		Stateless:    true,
 		JSONResponse: true,
 	})
-	return s, new(http.CrossOriginProtection).Handler(h)
+	return new(http.CrossOriginProtection).Handler(h)
 }
 
 func add[In, Out any](s *mcp.Server, name, description string, annotations *mcp.ToolAnnotations, handler func(context.Context, In) (Out, error)) {
@@ -89,11 +135,10 @@ func add[In, Out any](s *mcp.Server, name, description string, annotations *mcp.
 }
 
 var (
-	readOnly   = &mcp.ToolAnnotations{ReadOnlyHint: true, OpenWorldHint: boolPtr(false)}
-	additive   = &mcp.ToolAnnotations{DestructiveHint: boolPtr(false), OpenWorldHint: boolPtr(false)}
-	writing    = &mcp.ToolAnnotations{OpenWorldHint: boolPtr(false)}
-	closedID   = &mcp.ToolAnnotations{IdempotentHint: true, OpenWorldHint: boolPtr(false)}
-	idempotent = &mcp.ToolAnnotations{IdempotentHint: true, DestructiveHint: boolPtr(false), OpenWorldHint: boolPtr(false)}
+	readOnly = &mcp.ToolAnnotations{ReadOnlyHint: true, OpenWorldHint: boolPtr(false)}
+	additive = &mcp.ToolAnnotations{DestructiveHint: boolPtr(false), OpenWorldHint: boolPtr(false)}
+	writing  = &mcp.ToolAnnotations{OpenWorldHint: boolPtr(false)}
+	closedID = &mcp.ToolAnnotations{IdempotentHint: true, OpenWorldHint: boolPtr(false)}
 )
 
 func boolPtr(v bool) *bool { return &v }

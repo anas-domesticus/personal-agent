@@ -20,7 +20,10 @@ import (
 
 const drainTimeout = 30 * time.Second
 
-var _ mcpserver.Knowledge = (*app.Knowledge)(nil)
+var _ mcpserver.Nodes = (*app.Knowledge)(nil)
+var _ mcpserver.Edges = (*app.Knowledge)(nil)
+var _ mcpserver.Schema = (*app.Knowledge)(nil)
+var _ mcpserver.SchemaAdmin = (*app.Knowledge)(nil)
 
 func main() {
 	if err := run(); err != nil {
@@ -52,8 +55,12 @@ func run() error {
 		return err
 	}
 
-	_, handler := mcpserver.New(mcpserver.Deps{
-		Agents: a.Agents, Workflows: a.Workflows, Runs: a.Runs, Knowledge: &a.Knowledge, Tools: a.Tools,
+	_, consumerHandler := mcpserver.NewConsumer(mcpserver.ConsumerDeps{
+		Nodes: &a.Knowledge, Edges: &a.Knowledge, Schema: &a.Knowledge,
+	})
+	_, adminHandler := mcpserver.NewAdmin(mcpserver.AdminDeps{
+		Agents: a.Agents, Workflows: a.Workflows, Runs: a.Runs, Tools: a.Tools,
+		Schema: &a.Knowledge, SchemaAdmin: &a.Knowledge,
 	})
 	var lc net.ListenConfig
 	ln, err := lc.Listen(ctx, "tcp", cfg.ListenAddr)
@@ -61,7 +68,8 @@ func run() error {
 		return fmt.Errorf("listen on %s: %w", cfg.ListenAddr, err)
 	}
 	mux := http.NewServeMux()
-	mux.Handle("/mcp", handler)
+	mux.Handle("/mcp", consumerHandler)
+	mux.Handle("/mcp/admin", adminHandler)
 	srv := &http.Server{Handler: mux, ReadHeaderTimeout: 10 * time.Second}
 	go func() {
 		if err := srv.Serve(ln); !errors.Is(err, http.ErrServerClosed) {
@@ -69,7 +77,7 @@ func run() error {
 			cancel()
 		}
 	}()
-	slog.Info("MCP server ready", "url", "http://"+ln.Addr().String()+"/mcp")
+	slog.Info("MCP server ready", "consumer_url", "http://"+ln.Addr().String()+"/mcp", "admin_url", "http://"+ln.Addr().String()+"/mcp/admin")
 	<-ctx.Done()
 
 	shutdown, release := context.WithTimeout(context.Background(), drainTimeout)

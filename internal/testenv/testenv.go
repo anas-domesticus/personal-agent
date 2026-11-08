@@ -104,6 +104,9 @@ func NewWith(t *testing.T, adminModel string, o Options) *Env {
 		cfg, err := json.Marshal(domain.AgentConfig{MaxIterations: 30, Tools: domain.On(
 			"current_time", "web_search", "web_fetch", "subagent",
 			"read", "write", "edit", "glob", "grep", "shell",
+			"get_node", "list_nodes", "upsert_node", "delete_node", "search_nodes", "get_node_history",
+			"get_edge", "list_edges", "upsert_edge", "delete_edge", "get_edge_history",
+			"get_node_type", "list_node_types", "get_edge_type", "list_edge_types",
 		)})
 		require.NoError(t, err)
 		_, err = a.Agents.Create(ctx, DefaultAgent, "Test agent", domain.AgentVersionInput{
