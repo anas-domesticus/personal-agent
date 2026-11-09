@@ -3,9 +3,12 @@ package agent_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 
 	"github.com/cloudwego/eino/components/model"
+	"github.com/cloudwego/eino/components/tool"
+	"github.com/cloudwego/eino/schema"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -25,12 +28,13 @@ func TestBuildSpec(t *testing.T) {
 
 	id := uuid.New()
 	temp := float32(0.3)
+	maxTokens := 512
 	stored := func() domain.AgentDetail {
 		return domain.AgentDetail{
 			Agent: domain.Agent{ID: id, Name: "triager", Description: "ranks"},
 			Current: &domain.AgentVersion{
 				Version: 3, SystemPrompt: "Rank.", Model: "openai/gpt-5-mini",
-				Config:       domain.AgentConfig{Temperature: &temp, Tools: domain.On("current_time")},
+				Config:       domain.AgentConfig{Temperature: &temp, MaxTokens: &maxTokens, Tools: domain.On("current_time")},
 				OutputSchema: json.RawMessage(`{"type":"object"}`),
 			},
 		}
@@ -75,7 +79,7 @@ func TestBuildSpec(t *testing.T) {
 			},
 			wantInfo: agent.Info{Name: "triager", AgentID: id, Version: 3, Model: "openai/gpt-5-mini",
 				OutputSchema: json.RawMessage(`{"type":"object"}`)},
-			wantModel: llm.Spec{Model: "openai/gpt-5-mini", Temperature: &temp},
+			wantModel: llm.Spec{Model: "openai/gpt-5-mini", Temperature: &temp, MaxTokens: &maxTokens},
 		},
 		{
 			name: "stored agent on another model",
@@ -86,17 +90,7 @@ func TestBuildSpec(t *testing.T) {
 			},
 			wantInfo: agent.Info{Name: "triager", AgentID: id, Version: 3, Model: "deepseek/deepseek-v4.1-flash",
 				OutputSchema: json.RawMessage(`{"type":"object"}`)},
-			wantModel: llm.Spec{Model: "deepseek/deepseek-v4.1-flash", Temperature: &temp},
-		},
-		{
-			name:  "ad-hoc worker",
-			spec:  domain.SubagentSpec{Model: "fake/worker", Tools: domain.On("current_time")},
-			depth: 1,
-			setup: func(_ *agent.MockSource, ts *agent.MockToolset) {
-				ts.EXPECT().For(domain.On("current_time")).Return(nil).Once()
-			},
-			wantInfo:  agent.Info{Name: "subagent", Model: "fake/worker"},
-			wantModel: llm.Spec{Model: "fake/worker"},
+			wantModel: llm.Spec{Model: "deepseek/deepseek-v4.1-flash", Temperature: &temp, MaxTokens: &maxTokens},
 		},
 		{
 			name:  "ad-hoc worker",
@@ -137,4 +131,71 @@ func TestBuildSpec(t *testing.T) {
 			assert.Equal(t, tt.wantModel, gotModel)
 		})
 	}
+}
+
+func TestBuildSpecModelErrors(t *testing.T) {
+	t.Parallel()
+
+	modelErr := errors.New("model unavailable")
+	tests := []struct {
+		name     string
+		modelErr error
+		nilModel bool
+		wantErr  string
+	}{
+		{name: "model factory failure", modelErr: modelErr, wantErr: "model unavailable"},
+		{name: "Eino rejects a missing model", nilModel: true, wantErr: `build agent "subagent": agent 'Model' is required`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			ts := agent.NewMockToolset(t)
+			ts.EXPECT().For(domain.ToolConfig(nil)).Return(nil).Once()
+			b := &agent.Builder{
+				Agents: agent.NewMockSource(t),
+				Tools:  ts,
+				Models: func(context.Context, llm.Spec) (model.ToolCallingChatModel, error) {
+					if tt.modelErr != nil {
+						return nil, tt.modelErr
+					}
+					if tt.nilModel {
+						return nil, nil
+					}
+					return mocks.NewMockToolCallingChatModel(t), nil
+				},
+			}
+
+			r, err := b.BuildSpec(context.Background(), domain.SubagentSpec{Model: "fake/worker"}, 0)
+
+			assert.Nil(t, r)
+			require.ErrorContains(t, err, tt.wantErr)
+			if tt.modelErr != nil {
+				assert.ErrorIs(t, err, tt.modelErr)
+			}
+		})
+	}
+}
+
+func TestBuildSpecReportsToolNames(t *testing.T) {
+	t.Parallel()
+
+	tl := mocks.NewMockInvokableTool(t)
+	tl.EXPECT().Info(mock.Anything).Return(&schema.ToolInfo{Name: "current_time"}, nil).Once()
+	ts := agent.NewMockToolset(t)
+	ts.EXPECT().For(domain.On("current_time")).Return([]tool.BaseTool{tl}).Once()
+	b := &agent.Builder{
+		Agents: agent.NewMockSource(t),
+		Tools:  ts,
+		Models: func(context.Context, llm.Spec) (model.ToolCallingChatModel, error) {
+			return mocks.NewMockToolCallingChatModel(t), nil
+		},
+	}
+
+	r, err := b.BuildSpec(context.Background(), domain.SubagentSpec{
+		Model: "fake/worker",
+		Tools: domain.On("current_time"),
+	}, 0)
+
+	require.NoError(t, err)
+	assert.Equal(t, []string{"current_time"}, r.Info().Tools)
 }

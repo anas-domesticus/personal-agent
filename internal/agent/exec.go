@@ -21,9 +21,37 @@ type Turn struct {
 	CompletionTokens int
 }
 
+type eventIterator interface {
+	Next() (*adk.AgentEvent, bool)
+}
+
+type turnRunner interface {
+	Run(context.Context, []*schema.Message) eventIterator
+}
+
+type runnerFactory func(context.Context, adk.RunnerConfig) turnRunner
+
+type einoRunner struct {
+	runner *adk.Runner
+}
+
+func (r einoRunner) Run(ctx context.Context, history []*schema.Message) eventIterator {
+	return r.runner.Run(ctx, history)
+}
+
 type built struct {
-	agent adk.Agent
-	info  Info
+	info      Info
+	newRunner runnerFactory
+}
+
+func newBuilt(ag adk.Agent, info Info) *built {
+	return &built{
+		info: info,
+		newRunner: func(ctx context.Context, cfg adk.RunnerConfig) turnRunner {
+			cfg.Agent = ag
+			return einoRunner{runner: adk.NewRunner(ctx, cfg)}
+		},
+	}
 }
 
 func (b *built) Info() Info { return b.info }
@@ -33,7 +61,7 @@ func (b *built) Run(ctx context.Context, history []*schema.Message, obs Observer
 	if obs.Started != nil {
 		obs.Started(b.info)
 	}
-	runner := adk.NewRunner(ctx, adk.RunnerConfig{Agent: b.agent, EnableStreaming: obs.Delta != nil})
+	runner := b.newRunner(ctx, adk.RunnerConfig{EnableStreaming: obs.Delta != nil})
 	events := runner.Run(ctx, history)
 
 	var t Turn

@@ -154,5 +154,5 @@ func (b *Builder) assemble(ctx context.Context, a assembly) (Runnable, error) {
 			a.info.Tools = append(a.info.Tools, info.Name)
 		}
 	}
-	return &built{agent: ag, info: a.info}, nil
+	return newBuilt(ag, a.info), nil
 }
